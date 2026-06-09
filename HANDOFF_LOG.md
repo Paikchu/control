@@ -1,0 +1,10 @@
+- 交接时间：2026-06-09；目录：`/Users/max/Documents/Investing/portfolio-backtest-app`；这是一个本地 React/Vite 投资回测台，服务端固定跑在 `http://127.0.0.1:8787`，前端默认用 `npm run dev`。
+- 核心产品判断已经写进 `PRODUCT.md`：交易台工具，不做营销页；用户要自然语言输入策略，但结果必须落成可手改的规则行。
+- 策略解析主合同是 `strategy.conditions[]`，字段包括 `triggerAsset`、`metric`、`operator`、`value`、`targetAsset`、`targetWeight`、`sourceAsset`、`priority`；旧 threshold 字段只能当兼容输入，别再把新逻辑绑回去。
+- `POST /api/parse-strategy` 先走 DeepSeek JSON mode，失败后用本地 regex fallback；`GET /api/prices/:ticker` 独立拉 Yahoo Finance，并写入 `data/market-cache.sqlite` 的 `price_cache`。
+- 资产行的用户模型已经收窄到 `Ticker / Amount / Delete`；权重从金额占总资金推导，别重新暴露 `10`、`100` 这种会被误读成策略杠杆或上限的输入。
+- 当前前端有两条主线：ETF 策略回测和个人持仓 SEC 面板；持仓用 `localStorage` key `portfolio-backtest:holdings:v1`，默认含 `ASTS`、`SATS`、`QQQ`。
+- SEC 链路新增了 `src/secReport.mjs`：company facts 提取季度指标，inline XBRL 补 companyfacts 滞后，8-K/10-Q/10-K 文本拆段后生成 guidance/risk 信号。
+- 服务端 SEC 缓存表包括 `sec_cache`、`sec_report_versions`、`sec_report_facts`；报告接口是 `GET /api/sec/report/:ticker`，PDF 下载是 `GET /api/sec/filings/:ticker/:accession.pdf`。
+- 当前工作树已有未提交改动：`server.mjs`、`src/main.jsx`、`src/styles.css`、`package*.json`、`data/market-cache.sqlite`，以及新增 `PRODUCT.md`、`src/secReport.mjs`、`test/sec-report.test.mjs`；提交前先确认这些是否都属于同一批。
+- 验证入口：`npm run build` 看前端打包，`node --test test/*.test.mjs` 看策略描述、SEC 报告、行情合并；SEC 实盘接口依赖 `SEC_USER_AGENT`，DeepSeek 相关能力依赖本地环境变量。

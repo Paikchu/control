@@ -1,0 +1,10 @@
+- **定位**：本地投资回测台，核心用户是主动投资者；界面服务于 ETF 规则回测、自然语言策略整理、个人持仓 SEC 跟踪，不做营销页。
+- **运行入口**：`npm run dev` 启动 Vite 前端，`npm run api` 启动 Node API；服务端默认监听 `http://127.0.0.1:8787`，前端用固定 `apiBase` 访问本地接口。
+- **目录结构**：`src/main.jsx` 承载 React 应用、回测逻辑和页面状态；`src/marketSeries.mjs` 合并本地模拟价格与远端行情；`src/secReport.mjs` 构建 SEC 财报分析；`server.mjs` 提供行情、策略解析、SEC、PDF 接口；`data/market-cache.sqlite` 是本地缓存库；`test/*.test.mjs` 覆盖策略描述、行情合并、SEC 报告。
+- **前端架构**：单页 React 应用按 `activeView` 切换“回测”和“持仓”；回测侧管理资金、策略、资产行、自然语言草稿、收益曲线；持仓侧用 `portfolio-backtest:holdings:v1` 持久化股票、股数、成本、持仓逻辑、风险点。
+- **策略合同**：新策略模型以 `strategy.rules.conditions[]` 为准，字段含 `triggerAsset`、`metric`、`operator`、`value`、`targetAsset`、`targetWeight`、`sourceAsset`、`priority`；旧 `thresholds` 和 `exitRecovery` 只在 `normalizeConditions` 里兼容，不应成为新功能入口。
+- **回测内核**：`generatePrices` 提供离线基准价格，`GET /api/prices/:ticker` 从 Yahoo Finance 拉真实日线并写入 `price_cache`，`mergePriceData` 只保留所有外部序列都有价格的日期，避免跨资产错位回测。
+- **服务端接口**：`POST /api/parse-strategy` 用 DeepSeek JSON mode 整理自然语言，失败落到本地规则；`GET /api/sec/company/:ticker` 解析 CIK；`GET /api/sec/filings/:ticker` 拉 10-K/10-Q/8-K；`GET /api/sec/report/:ticker` 生成分析报告；`GET /api/sec/filings/:ticker/:accession.pdf` 把 SEC 文本转本地 PDF。
+- **SEC 数据链路**：`server.mjs` 读取 SEC ticker map、submissions、companyfacts、filing 原文；`src/secReport.mjs` 从 companyfacts 抽营收、毛利、利润、现金流，从 inline XBRL 补最新季度，从文本段落生成 guidance、risk、liquidity 信号。
+- **缓存与持久化**：SQLite 表包括 `price_cache`、`sec_cache`、`sec_report_versions`、`sec_report_facts`；行情 TTL 为 12 小时，SEC ticker map 为 7 天，filings/companyfacts 为 6 小时，文件/PDF 为 7 天。
+- **验证边界**：`npm run build` 验证前端打包，`node --test test/*.test.mjs` 验证核心数据合同；实盘 SEC 请求依赖 `SEC_USER_AGENT`，DeepSeek 路径依赖 `DEEPSEEK_API_KEY`、`DEEPSEEK_STRATEGY_MODEL`、`DEEPSEEK_SEC_MODEL`。

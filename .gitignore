@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+output/
+.playwright-cli/
+.playwright-mcp/
+clientportal.gw/
+clientportal.beta.gw/
+.DS_Store
+*.log
