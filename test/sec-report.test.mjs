@@ -6,6 +6,8 @@ import {
   extractInlineFinancialMetrics,
   extractFinancialMetrics,
   mergeReportRevision,
+  normalizeFilingSummary,
+  selectRenderableAiInsights,
   splitFilingSections
 } from '../src/secReport.mjs';
 
@@ -76,6 +78,30 @@ test('extracts SEC financial metrics with margin and year-over-year calculations
   assert.equal(metrics[1].netMargin, 0.08);
   assert.equal(metrics[1].revenueYoY, 0.25);
   assert.equal(metrics[1].source.tag, 'RevenueFromContractWithCustomerExcludingAssessedTax');
+});
+
+test('keeps only the current comparative row for each fiscal quarter', () => {
+  const comparativeFacts = {
+    facts: {
+      'us-gaap': {
+        RevenueFromContractWithCustomerExcludingAssessedTax: {
+          units: {
+            USD: [
+              { fy: 2026, fp: 'Q1', form: '10-Q', end: '2024-09-30', filed: '2025-10-29', val: 65, accn: 'q126' },
+              { fy: 2026, fp: 'Q1', form: '10-Q', end: '2025-09-30', filed: '2025-10-29', val: 78, accn: 'q126' }
+            ]
+          }
+        }
+      }
+    }
+  };
+
+  const metrics = extractFinancialMetrics(comparativeFacts, 8);
+
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].period, '2026 Q1');
+  assert.equal(metrics[0].end, '2025-09-30');
+  assert.equal(metrics[0].revenue, 78);
 });
 
 test('uses the latest quarterly period instead of stale annual data for headline metrics', () => {
@@ -218,4 +244,53 @@ test('splits filing text into auditable AI sections and produces fallback insigh
   assert.equal(insights.source, 'fallback');
   assert.equal(insights.sourceQuotes[0].accessionNumber, filings[0].accessionNumber);
   assert.ok(insights.guidanceChanges.length > 0);
+});
+
+test('filters unreadable and placeholder AI filing text from the report UI', () => {
+  const insights = selectRenderableAiInsights({
+    source: 'fallback',
+    guidanceChanges: [
+      { status: 'not_found', detail: '最新 filing 未定位到明确 Guidance / Outlook。' },
+      { status: 'needs_review', detail: 'Guidance / Outlook 相关文本已定位，需人工复核。' },
+      { status: 'confirmed', detail: '管理层将全年收入指引上调至 12% 至 14%。' }
+    ],
+    riskFlags: [
+      { severity: 'medium', detail: 'SEC filing document did not contain readable text' },
+      { severity: 'low', detail: '最新 filing 未定位到独立 Risk Factors section。' },
+      { severity: 'high', detail: '客户集中度风险较上一期上升。' }
+    ]
+  });
+
+  assert.deepEqual(insights.guidanceChanges, [
+    { status: 'confirmed', detail: '管理层将全年收入指引上调至 12% 至 14%。' }
+  ]);
+  assert.deepEqual(insights.riskFlags, [
+    { severity: 'high', detail: '客户集中度风险较上一期上升。' }
+  ]);
+});
+
+test('normalizes a filing summary into concise analyst-grade points', () => {
+  const summary = normalizeFilingSummary({
+    headline: '收入增长，但利润率继续承压。',
+    bullets: [
+      { label: '业绩', detail: '季度收入同比增长 16%，主要由云网络产品拉动。', importance: 'high' },
+      { label: '空项', detail: '需要结合后续材料复核。', importance: 'medium' },
+      { label: '利润率', detail: '毛利率为 28.8%，净利率为 -10.4%。', importance: 'high' },
+      { label: '流动性', detail: '资本开支与现金消耗仍是后续季度的核心约束。', importance: 'medium' },
+      { label: '风险', detail: '客户集中度和需求波动可能放大收入波动。', importance: 'medium' },
+      { label: '冗余', detail: '该条不应超过五条上限。', importance: 'low' }
+    ],
+    analystView: '增长质量取决于毛利率修复和现金消耗收窄。'
+  }, {
+    ticker: 'LITE',
+    form: '10-Q',
+    filingDate: '2026-06-01',
+    accessionNumber: '0001193125-26-249535'
+  });
+
+  assert.equal(summary.headline, '收入增长，但利润率继续承压。');
+  assert.equal(summary.bullets.length, 4);
+  assert.equal(summary.bullets[0].label, '业绩');
+  assert.equal(summary.analystView, '增长质量取决于毛利率修复和现金消耗收窄。');
+  assert.equal(summary.form, '10-Q');
 });

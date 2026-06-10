@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import ReactECharts from 'echarts-for-react';
-import { AlertTriangle, Briefcase, ExternalLink, FileDown, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, Briefcase, ExternalLink, FileDown, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { normalizeEntryPlan, normalizeHoldingItems } from './holdingNotes.mjs';
+import { holdingWeightPercent, summarizeIbkrCash } from './ibkrCash.mjs';
 import { mergePriceData } from './marketSeries.mjs';
+import { selectCanonicalFinancialQuarters, selectRenderableAiInsights } from './secReport.mjs';
+import { deriveConditionsFromText } from './strategyRules.mjs';
 import './styles.css';
 
 const assets = [
@@ -90,20 +94,23 @@ function normalizeStoredHolding(holding, index) {
     conid: holding?.conid ? String(holding.conid) : '',
     source: String(holding?.source || 'manual'),
     thesis: String(holding?.thesis || ''),
-    risk: String(holding?.risk || '')
+    risk: String(holding?.risk || ''),
+    thesisItems: normalizeHoldingItems(holding?.thesisItems, holding?.thesis, 'thesis'),
+    riskItems: normalizeHoldingItems(holding?.riskItems, holding?.risk, 'risk'),
+    entryPlan: normalizeEntryPlan(holding?.entryPlan)
   };
 }
 
 function readStoredPortfolio() {
-  if (typeof window === 'undefined') return defaultPortfolio;
+  if (typeof window === 'undefined') return defaultPortfolio.map(normalizeStoredHolding).filter(Boolean);
   try {
     const saved = window.localStorage.getItem(portfolioStorageKey);
-    if (saved === null) return defaultPortfolio;
+    if (saved === null) return defaultPortfolio.map(normalizeStoredHolding).filter(Boolean);
     const parsed = JSON.parse(saved);
-    if (!Array.isArray(parsed)) return defaultPortfolio;
+    if (!Array.isArray(parsed)) return defaultPortfolio.map(normalizeStoredHolding).filter(Boolean);
     return parsed.map(normalizeStoredHolding).filter(Boolean);
   } catch (error) {
-    return defaultPortfolio;
+    return defaultPortfolio.map(normalizeStoredHolding).filter(Boolean);
   }
 }
 
@@ -140,7 +147,10 @@ function ibkrHoldingFromPosition(position, notes) {
     secType: position.secType || 'STK',
     fetchedAt: position.fetchedAt,
     thesis: local?.thesis || '',
-    risk: local?.risk || ''
+    risk: local?.risk || '',
+    thesisItems: normalizeHoldingItems(local?.thesisItems, local?.thesis, 'thesis'),
+    riskItems: normalizeHoldingItems(local?.riskItems, local?.risk, 'risk'),
+    entryPlan: normalizeEntryPlan(local?.entryPlan)
   };
 }
 
@@ -458,8 +468,8 @@ function secCompanyUrl(symbol) {
   return `https://www.sec.gov/edgar/search/#/entityName=${query}`;
 }
 
-function reportChartOption(report, chartId) {
-  const quarters = report?.financials?.quarters || [];
+function reportChartOption(report, chartId, displayQuarters = null) {
+  const quarters = displayQuarters || report?.financials?.quarters || [];
   const periods = quarters.map((row) => row.period);
   const grid = { left: 46, right: 16, top: 28, bottom: 28 };
   const axisText = { color: '#6b7280', fontSize: 10 };
@@ -558,7 +568,6 @@ function clampStrategyPositions(strategy, totalFunding, positionId = null, nextA
 }
 
 function App() {
-  const [activeView, setActiveView] = useState('backtest');
   const [strategies, setStrategies] = useState([
     createStrategy(1, '深回撤增强'),
     {
@@ -582,6 +591,7 @@ function App() {
   const [ibkrSnapshot, setIbkrSnapshot] = useState(null);
   const [ibkrSyncStatus, setIbkrSyncStatus] = useState('idle');
   const [ibkrError, setIbkrError] = useState('');
+  const [ibkrPopoverOpen, setIbkrPopoverOpen] = useState(false);
   const [addHoldingOpen, setAddHoldingOpen] = useState(false);
   const [newHoldingTicker, setNewHoldingTicker] = useState('');
   const [newHoldingShares, setNewHoldingShares] = useState('');
@@ -592,6 +602,11 @@ function App() {
   const [secStatus, setSecStatus] = useState({});
   const [secReports, setSecReports] = useState({});
   const [secReportStatus, setSecReportStatus] = useState({});
+  const [filingSummaries, setFilingSummaries] = useState({});
+  const [filingSummaryStatus, setFilingSummaryStatus] = useState({});
+  const [holdingTab, setHoldingTab] = useState('thesis');
+  const [holdingQuery, setHoldingQuery] = useState('');
+  const filingSummaryRequests = useRef(new Set());
   const sheetTouchStart = useRef(null);
   const selectedTickers = useMemo(() => {
     const symbols = new Set();
@@ -621,6 +636,20 @@ function App() {
   const displayedPortfolio = useMemo(() => (
     ibkrPortfolio.length ? ibkrPortfolio : portfolio.map((holding) => ({ ...holding, source: holding.source || 'manual' }))
   ), [ibkrPortfolio, portfolio]);
+  const filteredPortfolio = useMemo(() => {
+    const query = holdingQuery.trim().toLowerCase();
+    if (!query) return displayedPortfolio;
+    return displayedPortfolio.filter((holding) => (
+      holding.symbol.toLowerCase().includes(query)
+      || holding.name.toLowerCase().includes(query)
+    ));
+  }, [displayedPortfolio, holdingQuery]);
+  const portfolioMarketValue = useMemo(() => displayedPortfolio.reduce((total, holding) => {
+    const marketValue = Number(holding.marketValue) || (Number(holding.shares) || 0) * (Number(holding.marketPrice ?? holding.cost) || 0);
+    return total + marketValue;
+  }, 0), [displayedPortfolio]);
+  const ibkrCashSummary = useMemo(() => summarizeIbkrCash(ibkrSnapshot), [ibkrSnapshot]);
+  const portfolioTotalValue = ibkrCashSummary.netLiquidation ?? portfolioMarketValue;
   const selectedHolding = displayedPortfolio.find((holding) => holding.id === expandedHolding) ?? displayedPortfolio[0];
   const showingIbkrPortfolio = ibkrPortfolio.length > 0;
   const hasIbkrAccess = ibkrStatus.authenticated || ibkrAccounts.length > 0 || Boolean(ibkrSnapshot?.lastSyncAt);
@@ -697,14 +726,58 @@ function App() {
         name: payload.strategy.name || strategy.name,
         rules: {
           ...strategy.rules,
+          conditions: (() => {
+            const derived = deriveConditionsFromText(payload.strategy.displayText || description, normalizeConditions(strategy.rules));
+            return derived.length ? derived : normalizeConditions(strategy.rules);
+          })(),
           displayText: payload.strategy.displayText || strategy.rules.displayText || description
         }
       }));
       setRuleDrafts((current) => ({ ...current, [strategyId]: '' }));
-      setParseStatus((current) => ({ ...current, [strategyId]: '已生成' }));
+      setParseStatus((current) => ({ ...current, [strategyId]: '规则已更新' }));
     } catch (error) {
-      setParseStatus((current) => ({ ...current, [strategyId]: '生成失败' }));
+      setParseStatus((current) => ({ ...current, [strategyId]: '转换失败' }));
     }
+  }
+
+  function updateCondition(strategyId, conditionId, key, value) {
+    updateStrategy(strategyId, (strategy) => ({
+      ...strategy,
+      rules: {
+        ...strategy.rules,
+        conditions: normalizeConditions(strategy.rules).map((condition) => {
+          if (condition.id !== conditionId) return condition;
+          const nextValue = ['value', 'targetWeight', 'priority'].includes(key) ? Number(value) || 0 : value;
+          return { ...condition, [key]: nextValue };
+        })
+      }
+    }));
+  }
+
+  function addCondition(strategyId) {
+    updateStrategy(strategyId, (strategy) => {
+      const conditions = normalizeConditions(strategy.rules);
+      return {
+        ...strategy,
+        rules: {
+          ...strategy.rules,
+          conditions: [...conditions, createCondition(conditions.length)]
+        }
+      };
+    });
+  }
+
+  function removeCondition(strategyId, conditionId) {
+    updateStrategy(strategyId, (strategy) => {
+      const conditions = normalizeConditions(strategy.rules).filter((condition) => condition.id !== conditionId);
+      return {
+        ...strategy,
+        rules: {
+          ...strategy.rules,
+          conditions: conditions.length ? conditions : [createCondition(0)]
+        }
+      };
+    });
   }
 
   function updateDate(key, value) {
@@ -718,7 +791,7 @@ function App() {
 
   function updateHolding(holdingId, key, value) {
     const ibkrHolding = displayedPortfolio.find((holding) => holding.id === holdingId && holding.source === 'ibkr');
-    if (ibkrHolding && ['thesis', 'risk', 'name'].includes(key)) {
+    if (ibkrHolding && ['thesis', 'risk', 'name', 'thesisItems', 'riskItems', 'entryPlan'].includes(key)) {
       setPortfolio((items) => {
         const matchedIndex = items.findIndex((holding) => (
           (holding.conid && String(holding.conid) === String(ibkrHolding.conid))
@@ -733,6 +806,9 @@ function App() {
           cost: ibkrHolding.cost,
           thesis: key === 'thesis' ? value : ibkrHolding.thesis,
           risk: key === 'risk' ? value : ibkrHolding.risk,
+          thesisItems: key === 'thesisItems' ? value : ibkrHolding.thesisItems,
+          riskItems: key === 'riskItems' ? value : ibkrHolding.riskItems,
+          entryPlan: key === 'entryPlan' ? value : ibkrHolding.entryPlan,
           source: 'ibkr-note'
         };
         if (matchedIndex < 0) return [...items, nextNote];
@@ -741,6 +817,31 @@ function App() {
       return;
     }
     setPortfolio((items) => items.map((holding) => holding.id === holdingId ? { ...holding, [key]: value } : holding));
+  }
+
+  function addHoldingItem(holding, key) {
+    const prefix = key === 'thesisItems' ? 'thesis' : 'risk';
+    const items = normalizeHoldingItems(holding[key], holding[key === 'thesisItems' ? 'thesis' : 'risk'], prefix);
+    updateHolding(holding.id, key, [...items, { id: `${prefix}-${Date.now()}`, text: '' }]);
+  }
+
+  function updateHoldingItem(holding, key, itemId, text) {
+    const prefix = key === 'thesisItems' ? 'thesis' : 'risk';
+    const items = normalizeHoldingItems(holding[key], holding[key === 'thesisItems' ? 'thesis' : 'risk'], prefix);
+    updateHolding(holding.id, key, items.map((item) => item.id === itemId ? { ...item, text } : item));
+  }
+
+  function removeHoldingItem(holding, key, itemId) {
+    const prefix = key === 'thesisItems' ? 'thesis' : 'risk';
+    const items = normalizeHoldingItems(holding[key], holding[key === 'thesisItems' ? 'thesis' : 'risk'], prefix);
+    updateHolding(holding.id, key, items.filter((item) => item.id !== itemId));
+  }
+
+  function updateEntryPlan(holding, key, value) {
+    updateHolding(holding.id, 'entryPlan', normalizeEntryPlan({
+      ...holding.entryPlan,
+      [key]: value
+    }));
   }
 
   async function resolveCompanyName(symbol) {
@@ -775,11 +876,7 @@ function App() {
   }
 
   function selectHolding(holdingId) {
-    setExpandedHolding((current) => {
-      const isPortraitPhone = window.matchMedia('(max-width: 767px) and (orientation: portrait)').matches;
-      if (isPortraitPhone && current === holdingId) return null;
-      return holdingId;
-    });
+    setExpandedHolding(holdingId);
   }
 
   async function loadIbkrStatus({ preserveError = false } = {}) {
@@ -891,7 +988,18 @@ function App() {
     setAddHoldingStatus('读取公司名称');
     const name = await resolveCompanyName(symbol);
     const id = `holding-${Date.now()}`;
-    setPortfolio((items) => [...items, { id, symbol, name, shares, cost, thesis: '', risk: '' }]);
+    setPortfolio((items) => [...items, {
+      id,
+      symbol,
+      name,
+      shares,
+      cost,
+      thesis: '',
+      risk: '',
+      thesisItems: [],
+      riskItems: [],
+      entryPlan: normalizeEntryPlan()
+    }]);
     setExpandedHolding(id);
     setAddHoldingOpen(false);
     setAddHoldingStatus('');
@@ -930,11 +1038,35 @@ function App() {
     try {
       const response = await fetch(`${apiBase}/api/sec/report/${encodeURIComponent(ticker)}${force ? '?force=1' : ''}`);
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'SEC 分析报告获取失败');
+      if (!response.ok) throw new Error(payload.error || 'SEC 文件信号获取失败');
       setSecReports((current) => ({ ...current, [ticker]: payload }));
       setSecReportStatus((current) => ({ ...current, [ticker]: 'loaded' }));
     } catch (error) {
       setSecReportStatus((current) => ({ ...current, [ticker]: 'error' }));
+    }
+  }
+
+  async function loadFilingSummary(symbol, filing) {
+    const ticker = symbol.trim().toUpperCase();
+    const accession = filing?.accessionNumber;
+    const key = `${ticker}:${accession}`;
+    if (!ticker || !accession || filingSummaryRequests.current.has(key)) return;
+    if (filingSummaries[key]) return;
+
+    filingSummaryRequests.current.add(key);
+    setFilingSummaryStatus((current) => ({ ...current, [key]: 'loading' }));
+    try {
+      const response = await fetch(
+        `${apiBase}/api/sec/filings/${encodeURIComponent(ticker)}/${encodeURIComponent(accession)}/summary`
+      );
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'SEC 文件摘要生成失败');
+      setFilingSummaries((current) => ({ ...current, [key]: payload }));
+      setFilingSummaryStatus((current) => ({ ...current, [key]: 'loaded' }));
+    } catch (error) {
+      setFilingSummaryStatus((current) => ({ ...current, [key]: 'error' }));
+    } finally {
+      filingSummaryRequests.current.delete(key);
     }
   }
 
@@ -955,7 +1087,16 @@ function App() {
   }, [selectedIbkrAccount]);
 
   useEffect(() => {
-    if (activeView !== 'portfolio') return;
+    if (!displayedPortfolio.length) {
+      if (expandedHolding) setExpandedHolding(null);
+      return;
+    }
+    if (!displayedPortfolio.some((holding) => holding.id === expandedHolding)) {
+      setExpandedHolding(displayedPortfolio[0].id);
+    }
+  }, [displayedPortfolio, expandedHolding]);
+
+  useEffect(() => {
     let cancelled = false;
     async function bootIbkr() {
       const status = await loadIbkrStatus();
@@ -976,7 +1117,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeView]);
+  }, []);
 
   useEffect(() => {
     const missing = selectedTickers.filter((symbol) => !marketSeries[symbol] && !['loading', 'error'].includes(tickerStatus[symbol]));
@@ -1001,15 +1142,37 @@ function App() {
   }, [selectedTickers, marketSeries, tickerStatus]);
 
   useEffect(() => {
-    if (activeView !== 'portfolio' || !expandedHolding) return;
+    if (!expandedHolding) return;
     const holding = displayedPortfolio.find((item) => item.id === expandedHolding);
     if (!holding?.symbol) return;
     loadSecFilings(holding.symbol);
     loadSecReport(holding.symbol);
-  }, [activeView, expandedHolding, displayedPortfolio]);
+  }, [expandedHolding, displayedPortfolio]);
 
   useEffect(() => {
-    if (activeView !== 'portfolio' || !expandedHolding) return undefined;
+    if (holdingTab !== 'sec' || !expandedHolding) return undefined;
+    const holding = displayedPortfolio.find((item) => item.id === expandedHolding);
+    const ticker = holding?.symbol?.trim().toUpperCase();
+    const filings = secFilings[ticker]?.filings || [];
+    if (!ticker || !filings.length) return undefined;
+
+    let cancelled = false;
+    let cursor = 0;
+    const worker = async () => {
+      while (!cancelled && cursor < filings.length) {
+        const filing = filings[cursor];
+        cursor += 1;
+        await loadFilingSummary(ticker, filing);
+      }
+    };
+    Promise.all([worker(), worker()]);
+    return () => {
+      cancelled = true;
+    };
+  }, [holdingTab, expandedHolding, displayedPortfolio, secFilings]);
+
+  useEffect(() => {
+    if (!expandedHolding) return undefined;
     const holding = displayedPortfolio.find((item) => item.id === expandedHolding);
     if (!holding?.symbol) return undefined;
     const timer = window.setInterval(() => {
@@ -1017,7 +1180,7 @@ function App() {
       loadSecReport(holding.symbol, true);
     }, 3 * 60 * 1000);
     return () => window.clearInterval(timer);
-  }, [activeView, expandedHolding, displayedPortfolio]);
+  }, [expandedHolding, displayedPortfolio]);
 
   useEffect(() => {
     let frame = 0;
@@ -1159,13 +1322,50 @@ function App() {
                 placeholder={strategy.rules.displayText ? '继续输入修改意见，例如：更保守一点，不要用杠杆。' : '描述你的策略，例如：QQQ 回撤 25% 时买一点 TQQQ，回撤 35% 时继续加，恢复到前高附近退出。'}
               />
               <button className="parseButton" onClick={() => parseRuleDraft(strategy.id)} disabled={parseStatus[strategy.id] === '转换中'}>
-                {parseStatus[strategy.id] === '转换中' ? '生成中' : '生成策略'}
+                {parseStatus[strategy.id] === '转换中' ? '转换中' : '整理规则'}
               </button>
               {parseStatus[strategy.id] && <span>{parseStatus[strategy.id]}</span>}
             </div>
             <div className="strategyOutput">
-              <span>生成后的策略</span>
-              <p>{strategy.rules.displayText || '生成后会显示整理后的自然语言策略。'}</p>
+              <span>当前规则</span>
+              <p>{strategy.rules.displayText || '整理后会显示当前策略。'}</p>
+            </div>
+            <div className="conditionTableWrap">
+              <div className="conditionTableHead">
+                <span>触发条件</span>
+                <button className="textButton" onClick={() => addCondition(strategy.id)}><Plus size={14} />条件</button>
+              </div>
+              <div className="conditionTable" role="table" aria-label={`${strategy.name} 条件表`}>
+                <div className="conditionHeader" role="row">
+                  <span>资产</span>
+                  <span>指标</span>
+                  <span>方向</span>
+                  <span>阈值</span>
+                  <span>目标</span>
+                  <span>权重</span>
+                  <span>优先</span>
+                  <span></span>
+                </div>
+                {normalizeConditions(strategy.rules).map((condition) => (
+                  <div className="conditionRow" role="row" key={condition.id}>
+                    <input value={condition.triggerAsset} onChange={(e) => updateCondition(strategy.id, condition.id, 'triggerAsset', normalizeTicker(e.target.value))} aria-label="触发资产" />
+                    <select value={condition.metric} onChange={(e) => updateCondition(strategy.id, condition.id, 'metric', e.target.value)} aria-label="指标">
+                      <option value="drawdown">回撤</option>
+                      <option value="price_above_ma">高于均线</option>
+                      <option value="price_below_ma">低于均线</option>
+                    </select>
+                    <select value={condition.operator} onChange={(e) => updateCondition(strategy.id, condition.id, 'operator', e.target.value)} aria-label="方向">
+                      <option value=">=">达到</option>
+                      <option value="<=">回到</option>
+                    </select>
+                    <input inputMode="decimal" value={condition.value} onChange={(e) => updateCondition(strategy.id, condition.id, 'value', e.target.value)} aria-label="阈值" />
+                    <input value={condition.targetAsset} onChange={(e) => updateCondition(strategy.id, condition.id, 'targetAsset', normalizeTicker(e.target.value))} aria-label="目标资产" />
+                    <input inputMode="decimal" value={condition.targetWeight} onChange={(e) => updateCondition(strategy.id, condition.id, 'targetWeight', e.target.value)} aria-label="目标权重" />
+                    <input inputMode="numeric" value={condition.priority} onChange={(e) => updateCondition(strategy.id, condition.id, 'priority', e.target.value)} aria-label="优先级" />
+                    <button className="iconButton dangerButton" onClick={() => removeCondition(strategy.id, condition.id)} aria-label="删除条件"><Trash2 size={13} /></button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         ))}
@@ -1173,28 +1373,28 @@ function App() {
     </aside>
   );
 
-  const isPhoneViewport = typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
-
   function renderSecAnalysisReport(ticker) {
     const report = secReports[ticker];
     const status = secReportStatus[ticker];
     const latest = report?.financials?.latest;
-    const quarters = report?.financials?.quarters || [];
+    const quarters = selectCanonicalFinancialQuarters(report?.financials?.quarters || []);
+    const aiInsights = selectRenderableAiInsights(report?.ai);
+    const hasAiInsights = aiInsights.guidanceChanges.length > 0 || aiInsights.riskFlags.length > 0;
 
     return (
-      <section className="secAnalysisPanel" aria-label="SEC 分析报告">
+      <section className="secAnalysisPanel" aria-label="SEC 文件信号">
         <div className="secAnalysisHead">
           <div>
-            <span>SEC 分析报告</span>
+            <span>SEC 文件信号</span>
             <strong>{report?.companyName || ticker}</strong>
           </div>
           <button className="addAssetButton" onClick={() => loadSecReport(ticker, true)} disabled={status === 'loading'}>
-            {status === 'loading' ? '生成中' : '更新报告'}
+            {status === 'loading' ? '读取中' : '更新信号'}
           </button>
         </div>
 
         {status === 'loading' && <p className="secFilingState">正在读取 SEC company facts 和近期 filing...</p>}
-        {status === 'error' && <p className="secFilingState">报告生成失败。SEC 文件下载仍可使用。</p>}
+        {status === 'error' && <p className="secFilingState">SEC 读取失败。文件下载仍可使用。</p>}
         {report && (
           <>
             <div className="secInsightGrid">
@@ -1229,33 +1429,37 @@ function App() {
               ))}
             </div>
 
-            <div className="secAiGrid">
-              <div>
-                <span>Guidance / Outlook</span>
-                {(report.ai?.guidanceChanges || []).slice(0, 3).map((item, index) => (
-                  <p key={`guidance-${index}`}>{item.detail || item.status || '已定位 guidance 相关文本。'}</p>
-                ))}
-                {!report.ai?.guidanceChanges?.length && <p>最新 SEC 文件未定位到明确 Guidance / Outlook，等待 8-K 或 earnings release 复核。</p>}
+            {hasAiInsights && (
+              <div className="secAiGrid">
+                {aiInsights.guidanceChanges.length > 0 && (
+                  <div>
+                    <span>Guidance / Outlook</span>
+                    {aiInsights.guidanceChanges.slice(0, 3).map((item, index) => (
+                      <p key={`guidance-${index}`}>{item.detail}</p>
+                    ))}
+                  </div>
+                )}
+                {aiInsights.riskFlags.length > 0 && (
+                  <div>
+                    <span>文件风险</span>
+                    {aiInsights.riskFlags.slice(0, 3).map((item, index) => (
+                      <p key={`risk-${index}`}>{item.detail}</p>
+                    ))}
+                  </div>
+                )}
               </div>
-              <div>
-                <span>AI 风险信号</span>
-                {(report.ai?.riskFlags || []).slice(0, 3).map((item, index) => (
-                  <p key={`risk-${index}`}>{item.detail || item.label || '风险文本需要复核。'}</p>
-                ))}
-                {!report.ai?.riskFlags?.length && <p>未触发文本风险信号。</p>}
-              </div>
-            </div>
+            )}
 
             {quarters.length > 0 && (
               <>
                 <div className="secChartGrid">
                   <div className="secMiniChart">
                     <span>营收变化</span>
-                    <ReactECharts option={reportChartOption(report, 'revenue-yoy')} style={{ height: 190 }} notMerge />
+                    <ReactECharts option={reportChartOption(report, 'revenue-yoy', quarters)} style={{ height: 190 }} notMerge />
                   </div>
                   <div className="secMiniChart">
                     <span>利润率变化</span>
-                    <ReactECharts option={reportChartOption(report, 'margin-lines')} style={{ height: 190 }} notMerge />
+                    <ReactECharts option={reportChartOption(report, 'margin-lines', quarters)} style={{ height: 190 }} notMerge />
                   </div>
                 </div>
                 <div className="secMetricTableWrap">
@@ -1299,80 +1503,223 @@ function App() {
     const filingStatus = ticker ? secStatus[ticker] : null;
     const marketValue = Number(holding.marketValue) || (Number(holding.shares) || 0) * (Number(holding.marketPrice ?? holding.cost) || 0);
     const isIbkr = holding.source === 'ibkr';
+    const thesisItems = normalizeHoldingItems(holding.thesisItems, holding.thesis, 'thesis');
+    const riskItems = normalizeHoldingItems(holding.riskItems, holding.risk, 'risk');
+    const entryPlan = normalizeEntryPlan(holding.entryPlan);
+    const plannedShares = entryPlan.batches * entryPlan.sharesPerBatch;
 
     return (
-      <article className={`holdingDetail ${className}`.trim()} aria-label="持仓详情">
-        <div className="detailHero">
-          <div>
-            <span>{ticker || 'TICKER'}{isIbkr ? ' / IBKR' : ''}</span>
-            <h3>{holding.name || '未命名持仓'}</h3>
+      <article key={holding.id} className={`holdingDetail ${className}`.trim()} aria-label="持仓详情" data-holding-detail={ticker}>
+        <div className="holdingDetailHeader">
+          <div className="detailHero">
+            <div>
+              <span>{ticker || 'TICKER'}{isIbkr ? ' / IBKR' : ''}</span>
+              <h3>{holding.name || '未命名持仓'}</h3>
+            </div>
+            <strong>{formatMoney(marketValue)}</strong>
           </div>
-          <strong>{formatMoney(marketValue)}</strong>
+          <div className="holdingTabs" role="tablist" aria-label="持仓详情页签">
+            <button className={holdingTab === 'thesis' ? 'active' : ''} onClick={() => setHoldingTab('thesis')} role="tab" aria-selected={holdingTab === 'thesis'}>持仓逻辑</button>
+            <button className={holdingTab === 'sec' ? 'active' : ''} onClick={() => setHoldingTab('sec')} role="tab" aria-selected={holdingTab === 'sec'}>SEC 报告</button>
+          </div>
         </div>
-        {isIbkr && (
-          <div className="ibkrMetricGrid">
-            <div><span>数量</span><strong>{Number(holding.shares || 0).toLocaleString('en-US', { maximumFractionDigits: 4 })}</strong></div>
-            <div><span>平均成本</span><strong>{formatMoney(Number(holding.cost) || 0)}</strong></div>
-            <div><span>现价</span><strong>{hasNumber(Number(holding.marketPrice)) ? formatMoney(Number(holding.marketPrice)) : 'n/a'}</strong></div>
-            <div><span>P&L</span><strong className={Number(holding.unrealizedPnl) >= 0 ? 'gain' : 'loss'}>{hasNumber(Number(holding.unrealizedPnl)) ? formatMoney(Number(holding.unrealizedPnl)) : 'n/a'}</strong></div>
-            <div><span>货币</span><strong>{holding.currency || 'USD'}</strong></div>
-            <div><span>ConID</span><strong>{holding.conid}</strong></div>
-          </div>
-        )}
-        <div className="holdingNotes">
-          <label>
-            <span>持仓逻辑</span>
-            <textarea value={holding.thesis} onChange={(e) => updateHolding(holding.id, 'thesis', e.target.value)} />
-          </label>
-          <label>
-            <span>风险点</span>
-            <textarea value={holding.risk} onChange={(e) => updateHolding(holding.id, 'risk', e.target.value)} />
-          </label>
-        </div>
-        {ticker && renderSecAnalysisReport(ticker)}
-        <div className="secFilingPanel">
-          <div className="secFilingHead">
-            <span>SEC 文件</span>
-            <em>{filingPayload?.company?.name || ticker}</em>
-          </div>
-          {filingStatus === 'loading' && <p className="secFilingState">正在获取 10-K / 10-Q / 8-K...</p>}
-          {filingStatus === 'error' && <p className="secFilingState">自动获取失败，可先用 SEC 搜索打开。</p>}
-          {filingStatus !== 'loading' && filingPayload?.filings?.length === 0 && <p className="secFilingState">未找到 10-K / 10-Q / 8-K。</p>}
-          {filingPayload?.filings?.length > 0 && (
-            <div className="secFilingList">
-              {filingPayload.filings.map((filing) => (
-                <div className="secFilingRow" key={filing.accessionNumber}>
-                  <div>
-                    <strong>{filing.form}</strong>
-                    <span>{filing.filingDate}{filing.reportDate ? ` / ${filing.reportDate}` : ''}</span>
-                  </div>
-                  <a
-                    href={`${apiBase}${filing.pdfUrl}`}
-                    download={`${ticker}-${filing.form}-${filing.filingDate}.pdf`}
-                  >
-                    下载 PDF
-                  </a>
+        <div className="holdingTabBody" key={`${holding.id}-${holdingTab}`}>
+          {holdingTab === 'thesis' ? (
+            <div className="holdingThesisWorkspace">
+              <section className="holdingListEditor" aria-labelledby={`thesis-title-${holding.id}`}>
+                <div className="holdingEditorHead">
+                  <span id={`thesis-title-${holding.id}`}>持仓逻辑</span>
                 </div>
-              ))}
+                {thesisItems.length > 0 ? (
+                  <ul className="holdingReminderList">
+                    {thesisItems.map((item, index) => (
+                      <li className="holdingReminderRow" key={item.id}>
+                        <span className="reminderBullet" aria-hidden="true" />
+                        <input
+                          value={item.text}
+                          placeholder={`持仓逻辑 ${index + 1}`}
+                          onChange={(event) => updateHoldingItem(holding, 'thesisItems', item.id, event.target.value)}
+                          aria-label={`持仓逻辑 ${index + 1}`}
+                        />
+                        <button
+                          className="reminderDelete"
+                          onClick={() => removeHoldingItem(holding, 'thesisItems', item.id)}
+                          aria-label={`删除持仓逻辑 ${index + 1}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="holdingListEmpty">还没有持仓逻辑。</p>
+                )}
+                <button className="holdingAddItem" onClick={() => addHoldingItem(holding, 'thesisItems')}>
+                  <Plus size={14} />
+                  添加一条
+                </button>
+              </section>
+
+              <section className="holdingListEditor riskListEditor" aria-labelledby={`risk-title-${holding.id}`}>
+                <div className="holdingEditorHead">
+                  <span id={`risk-title-${holding.id}`}>风险点</span>
+                </div>
+                {riskItems.length > 0 ? (
+                  <ul className="holdingReminderList">
+                    {riskItems.map((item, index) => (
+                      <li className="holdingReminderRow" key={item.id}>
+                        <span className="reminderBullet" aria-hidden="true" />
+                        <input
+                          value={item.text}
+                          placeholder={`风险点 ${index + 1}`}
+                          onChange={(event) => updateHoldingItem(holding, 'riskItems', item.id, event.target.value)}
+                          aria-label={`风险点 ${index + 1}`}
+                        />
+                        <button
+                          className="reminderDelete"
+                          onClick={() => removeHoldingItem(holding, 'riskItems', item.id)}
+                          aria-label={`删除风险点 ${index + 1}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="holdingListEmpty">还没有风险点。</p>
+                )}
+                <button className="holdingAddItem" onClick={() => addHoldingItem(holding, 'riskItems')}>
+                  <Plus size={14} />
+                  添加一条
+                </button>
+              </section>
+
+              <section className="entryPlan" aria-labelledby={`entry-plan-title-${holding.id}`}>
+                <div className="holdingEditorHead">
+                  <span id={`entry-plan-title-${holding.id}`}>建仓计划</span>
+                  <em>预计 {plannedShares.toLocaleString('en-US', { maximumFractionDigits: 4 })} 股</em>
+                </div>
+                <div className="entryPlanGrid">
+                  <label>
+                    <span>建仓批次</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      step="1"
+                      value={entryPlan.batches}
+                      onChange={(event) => updateEntryPlan(holding, 'batches', event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>每批股数</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={entryPlan.sharesPerBatch}
+                      onChange={(event) => updateEntryPlan(holding, 'sharesPerBatch', event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>目标仓位</span>
+                    <div className="entryPlanSuffix">
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={entryPlan.targetWeight}
+                        onChange={(event) => updateEntryPlan(holding, 'targetWeight', event.target.value)}
+                      />
+                      <em>%</em>
+                    </div>
+                  </label>
+                </div>
+              </section>
+            </div>
+          ) : (
+            <div className="secTabPane">
+              {ticker && renderSecAnalysisReport(ticker)}
+              <div className="secFilingPanel">
+                <div className="secFilingHead">
+                  <span>SEC 文件</span>
+                  <em>{filingPayload?.company?.name || ticker}</em>
+                </div>
+                {filingStatus === 'loading' && <p className="secFilingState">正在获取 10-K / 10-Q / 8-K...</p>}
+                {filingStatus === 'error' && <p className="secFilingState">自动获取失败，可先用 SEC 搜索打开。</p>}
+                {filingStatus !== 'loading' && filingPayload?.filings?.length === 0 && <p className="secFilingState">未找到 10-K / 10-Q / 8-K。</p>}
+                {filingPayload?.filings?.length > 0 && (
+                  <div className="secFilingList">
+                    {filingPayload.filings.map((filing) => {
+                      const summaryKey = `${ticker}:${filing.accessionNumber}`;
+                      const summary = filingSummaries[summaryKey];
+                      const summaryStatus = filingSummaryStatus[summaryKey];
+                      return (
+                        <article className="secFilingItem" key={filing.accessionNumber}>
+                          <div className="secFilingRow">
+                            <div>
+                              <strong>{filing.form}</strong>
+                              <span>{filing.filingDate}{filing.reportDate ? ` / ${filing.reportDate}` : ''}</span>
+                            </div>
+                            <a
+                              href={`${apiBase}${filing.pdfUrl}`}
+                              download={`${ticker}-${filing.form}-${filing.filingDate}.pdf`}
+                            >
+                              下载 PDF
+                            </a>
+                          </div>
+                          {summaryStatus === 'loading' && (
+                            <div className="secFilingSummaryLoading" aria-label="AI 正在生成文件摘要">
+                              <span />
+                              <span />
+                            </div>
+                          )}
+                          {summary && (
+                            <div className="secFilingSummary">
+                              <div className="secFilingSummaryHead">
+                                <span>AI 要点</span>
+                                <em>{summary.source === 'deepseek' ? 'Filing 分析' : '自动摘要'}</em>
+                              </div>
+                              {summary.headline && <strong>{summary.headline}</strong>}
+                              {summary.bullets?.length > 0 && (
+                                <ul>
+                                  {summary.bullets.map((item, index) => (
+                                    <li key={`${item.label}-${index}`}>
+                                      <span>{item.label}</span>
+                                      <p>{item.detail}</p>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                              {summary.analystView && <p className="secAnalystView">{summary.analystView}</p>}
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="secStrip">
+                <button className="addAssetButton" onClick={() => {
+                  loadSecFilings(holding.symbol, true);
+                  loadSecReport(holding.symbol, true);
+                }}>
+                  <FileDown size={16} />
+                  {filingStatus === 'loading' ? '获取中' : '刷新 SEC'}
+                </button>
+                <a href={secFilingsUrl(holding.symbol)} target="_blank" rel="noreferrer">
+                  <FileDown size={16} />
+                  搜索公司
+                </a>
+                <a href={secCompanyUrl(holding.symbol)} target="_blank" rel="noreferrer">
+                  <ExternalLink size={16} />
+                  SEC 档案
+                </a>
+              </div>
             </div>
           )}
-        </div>
-        <div className="secStrip">
-          <button className="addAssetButton" onClick={() => {
-            loadSecFilings(holding.symbol, true);
-            loadSecReport(holding.symbol, true);
-          }}>
-            <FileDown size={16} />
-            {filingStatus === 'loading' ? '获取中' : '刷新 SEC'}
-          </button>
-          <a href={secFilingsUrl(holding.symbol)} target="_blank" rel="noreferrer">
-            <FileDown size={16} />
-            搜索公司
-          </a>
-          <a href={secCompanyUrl(holding.symbol)} target="_blank" rel="noreferrer">
-            <ExternalLink size={16} />
-            SEC 档案
-          </a>
         </div>
       </article>
     );
@@ -1380,160 +1727,158 @@ function App() {
 
   const portfolioView = (
     <section className="portfolioDesk" aria-label="个人持仓">
-      <div className="portfolioGrid">
-        <aside className="holdingList" aria-label="持仓列表">
-          <div className={`ibkrPanel ${hasIbkrAccess ? 'connected' : ''}`}>
-            <div>
-              <strong>{hasIbkrAccess ? 'IBKR 已连接' : ibkrStatus.gateway === 'offline' ? 'IBKR Gateway 未运行' : '需要登录 IBKR'}</strong>
-              <span>
-                {ibkrSnapshot?.lastSyncAt ? `最后同步 ${new Date(ibkrSnapshot.lastSyncAt).toLocaleString('zh-CN')}` : '未同步账户持仓'}
-              </span>
-            </div>
-            <div className="ibkrActions">
-              {ibkrAccounts.length > 0 && (
-                <select value={selectedIbkrAccount} onChange={(event) => changeIbkrAccount(event.target.value)}>
-                  {ibkrAccounts.map((account) => (
-                    <option key={account.accountId} value={account.accountId}>{account.accountTitle || account.accountId}</option>
-                  ))}
-                </select>
-              )}
-              <a className="ibkrLoginLink" href={ibkrStatus.loginUrl || 'https://localhost:5001'} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开登录页</a>
-              <button className="iconTextButton" onClick={refreshIbkr} disabled={ibkrSyncStatus === 'syncing'}>
-                <RefreshCw size={14} />
-                {ibkrSyncStatus === 'syncing' ? '同步中' : '刷新状态'}
-              </button>
-            </div>
-            {(ibkrError || (!hasIbkrAccess && ibkrStatus.gateway !== 'offline')) && (
-              <p>{ibkrError || '完成 IBKR 2FA 后点击刷新状态。'}</p>
+      <header className="portfolioToolbar">
+        <div className="portfolioIdentity">
+          <span className="portfolioMark" aria-hidden="true">P</span>
+          <div>
+            <h1>Portfolio</h1>
+            <span>{displayedPortfolio.length} 个持仓 · 总资产 {formatMoney(portfolioTotalValue)}</span>
+          </div>
+        </div>
+        {ibkrCashSummary.cashBalance !== null && (
+          <div className="portfolioCash" title="IBKR Ledger 基准币现金；币种明细不重复计入">
+            <span>IBKR 现金</span>
+            <strong>{formatMoney(ibkrCashSummary.cashBalance)}</strong>
+            {ibkrCashSummary.currencyBalances.length > 0 && (
+              <small>
+                {ibkrCashSummary.currencyBalances.map((balance) => (
+                  `${balance.currency} ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(balance.cashBalance)}`
+                )).join(' · ')}
+              </small>
             )}
           </div>
-          <div className="portfolioHead">
-            <div>
-              <h2>{showingIbkrPortfolio ? 'IBKR 持仓' : '个人持仓'}</h2>
-            </div>
-            <button className="addAssetButton" onClick={addHolding}><Plus size={15} />手动添加</button>
-          </div>
-          {displayedPortfolio.length === 0 && (
-            <div className="holdingEmpty">
-              <strong>没有可显示的持仓</strong>
-              <span>登录 IBKR 同步，或先手动添加股票。</span>
+        )}
+        <label className="holdingSearch">
+          <Search size={18} aria-hidden="true" />
+          <input
+            value={holdingQuery}
+            onChange={(event) => setHoldingQuery(event.target.value)}
+            placeholder="搜索股票或公司"
+            aria-label="搜索持仓"
+          />
+        </label>
+        <div className="portfolioUtility">
+          <button className={`ibkrStatusButton ${hasIbkrAccess ? 'connected' : ''}`} onClick={() => setIbkrPopoverOpen((open) => !open)} aria-expanded={ibkrPopoverOpen}>
+            <Briefcase size={14} />
+            {hasIbkrAccess ? 'IBKR 已连接' : ibkrStatus.gateway === 'offline' ? 'IBKR 未运行' : 'IBKR 登录'}
+          </button>
+          {ibkrPopoverOpen && (
+            <div className={`ibkrPanel ibkrPopover ${hasIbkrAccess ? 'connected' : ''}`}>
+              <div>
+                <strong>{hasIbkrAccess ? 'IBKR 已连接' : ibkrStatus.gateway === 'offline' ? 'IBKR Gateway 未运行' : '需要登录 IBKR'}</strong>
+                <span>
+                  {ibkrSnapshot?.lastSyncAt ? `最后同步 ${new Date(ibkrSnapshot.lastSyncAt).toLocaleString('zh-CN')}` : '未同步账户持仓'}
+                </span>
+              </div>
+              <div className="ibkrActions">
+                {ibkrAccounts.length > 0 && (
+                  <select value={selectedIbkrAccount} onChange={(event) => changeIbkrAccount(event.target.value)}>
+                    {ibkrAccounts.map((account) => (
+                      <option key={account.accountId} value={account.accountId}>{account.accountTitle || account.accountId}</option>
+                    ))}
+                  </select>
+                )}
+                <a className="ibkrLoginLink" href={ibkrStatus.loginUrl || 'https://localhost:5001'} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开登录页</a>
+                <button className="iconTextButton" onClick={refreshIbkr} disabled={ibkrSyncStatus === 'syncing'}>
+                  <RefreshCw size={14} />
+                  {ibkrSyncStatus === 'syncing' ? '同步中' : '刷新状态'}
+                </button>
+              </div>
+              {(ibkrError || (!hasIbkrAccess && ibkrStatus.gateway !== 'offline')) && (
+                <p>{ibkrError || '完成 IBKR 2FA 后点击刷新状态。'}</p>
+              )}
             </div>
           )}
-          {displayedPortfolio.map((holding) => {
-            const isOpen = expandedHolding === holding.id;
-            const isIbkr = holding.source === 'ibkr';
-            const marketValue = Number(holding.marketValue) || (Number(holding.shares) || 0) * (Number(holding.marketPrice ?? holding.cost) || 0);
-            const pnl = Number(holding.unrealizedPnl);
-            return (
-              <article className={`holdingRow ${isOpen ? 'open' : ''}`} key={holding.id}>
-                <div className="holdingSummary">
+        </div>
+      </header>
+      <div className="portfolioGrid">
+        <aside className="holdingList" aria-label="持仓列表">
+          <div className="holdingListHead">
+            <div>
+              <h2>持仓</h2>
+              <span>{filteredPortfolio.length} / {displayedPortfolio.length}</span>
+            </div>
+            <button onClick={addHolding}><Plus size={16} />添加</button>
+          </div>
+          <div className="holdingTable" role="table" aria-label="持仓表">
+            <div className="holdingTableHeader" role="row">
+              <span>股票</span>
+              <span>市值</span>
+              <span>价格 / P&amp;L</span>
+              <span></span>
+            </div>
+            {filteredPortfolio.map((holding, index) => {
+              const isOpen = expandedHolding === holding.id;
+              const isIbkr = holding.source === 'ibkr';
+              const marketValue = Number(holding.marketValue) || (Number(holding.shares) || 0) * (Number(holding.marketPrice ?? holding.cost) || 0);
+              const weightPercent = holdingWeightPercent(marketValue, portfolioTotalValue);
+              const pnl = Number(holding.unrealizedPnl);
+              const marketPrice = Number(holding.marketPrice);
+              const cost = Number(holding.cost);
+              return (
+                <article className={`holdingRow ${isOpen ? 'open' : ''}`} key={holding.id} role="row" style={{ '--row-index': Math.min(index, 8) }}>
                   <button className="holdingSelect" onClick={() => selectHolding(holding.id)} aria-pressed={isOpen}>
                     <span className="holdingTicker">{holding.symbol || 'TICKER'} <em>{isIbkr ? 'IBKR' : '本地'}</em></span>
-                    <span className="holdingValue">
-                      {formatMoney(marketValue)}
-                      {isIbkr && hasNumber(pnl) && <small className={pnl >= 0 ? 'gain' : 'loss'}>{formatMoney(pnl)}</small>}
-                    </span>
+                    <small>{holding.name || holding.symbol}</small>
+                  </button>
+                  <button className="holdingValue" onClick={() => selectHolding(holding.id)} aria-pressed={isOpen}>
+                    <strong>{formatMoney(marketValue)}</strong>
+                    <small className="holdingWeight">{weightPercent === null ? 'n/a' : `${weightPercent.toFixed(2)}%`}</small>
+                  </button>
+                  <button className="holdingMovement" onClick={() => selectHolding(holding.id)} aria-pressed={isOpen}>
+                    <strong>{hasNumber(marketPrice) ? formatMoney(marketPrice) : 'n/a'}</strong>
+                    <small className={hasNumber(pnl) ? pnl >= 0 ? 'gain' : 'loss' : ''}>{hasNumber(pnl) ? formatMoney(pnl) : 'n/a'}</small>
                   </button>
                   {!isIbkr ? (
                     <button className="holdingDelete" onClick={() => removeHolding(holding.id)} aria-label={`删除 ${holding.symbol || '股票'}`}>
-                      <Trash2 size={15} />
+                      <Trash2 size={14} />
                     </button>
-                  ) : <span className="holdingLock">只读</span>}
-                </div>
-                <div className="holdingFields">
-                  <label>
-                    <span>Ticker</span>
-                    <input value={holding.symbol} readOnly={isIbkr} onFocus={() => setExpandedHolding(holding.id)} onChange={(e) => updateHoldingTicker(holding.id, e.target.value)} />
-                  </label>
-                  <label>
-                    <span>公司</span>
-                    <input value={holding.name} onFocus={() => setExpandedHolding(holding.id)} onChange={(e) => updateHolding(holding.id, 'name', e.target.value)} />
-                  </label>
-                  <label>
-                    <span>股数</span>
-                    <input inputMode="decimal" value={holding.shares} readOnly={isIbkr} onFocus={() => setExpandedHolding(holding.id)} onChange={(e) => updateHolding(holding.id, 'shares', e.target.value)} />
-                  </label>
-                  <label>
-                    <span>{isIbkr ? '平均成本' : '成本'}</span>
-                    <input inputMode="decimal" value={holding.cost} readOnly={isIbkr} onFocus={() => setExpandedHolding(holding.id)} onChange={(e) => updateHolding(holding.id, 'cost', e.target.value)} />
-                  </label>
-                </div>
-                {isOpen && isPhoneViewport && <div className="holdingInlineDetail">{renderHoldingDetail(holding)}</div>}
-              </article>
-            );
-          })}
+                  ) : <span className="holdingLock" aria-hidden="true"></span>}
+                  <div className="holdingQuickEdit">
+                    <label>
+                      <span>数量</span>
+                      <input inputMode="decimal" value={holding.shares} readOnly={isIbkr} onFocus={() => setExpandedHolding(holding.id)} onChange={(e) => updateHolding(holding.id, 'shares', e.target.value)} aria-label={`${holding.symbol} 股数`} />
+                    </label>
+                    <label>
+                      <span>成本</span>
+                      <input
+                        inputMode="decimal"
+                        value={isIbkr && Number.isFinite(cost) ? cost.toFixed(1) : holding.cost}
+                        readOnly={isIbkr}
+                        onFocus={() => setExpandedHolding(holding.id)}
+                        onBlur={(e) => {
+                          const value = Number(e.target.value);
+                          if (!isIbkr && Number.isFinite(value)) updateHolding(holding.id, 'cost', value.toFixed(1));
+                        }}
+                        onChange={(e) => updateHolding(holding.id, 'cost', e.target.value)}
+                        aria-label={`${holding.symbol} 成本`}
+                      />
+                    </label>
+                  </div>
+                </article>
+              );
+            })}
+            {filteredPortfolio.length === 0 && <p className="holdingFilterEmpty">没有匹配的持仓。</p>}
+          </div>
         </aside>
 
-        {!isPhoneViewport && renderHoldingDetail(selectedHolding, 'holdingDetailDesktop')}
+        <section className="researchPane" aria-label="研究面板">
+          <div className="researchPaneLabel">
+            <span>Research</span>
+            <em>{selectedHolding?.symbol || '—'}</em>
+          </div>
+          {renderHoldingDetail(selectedHolding, 'holdingDetailDesktop')}
+        </section>
       </div>
     </section>
   );
 
   return (
     <div className="shell">
-      <nav className="viewTabs" aria-label="页面切换">
-        <button className={activeView === 'backtest' ? 'active' : ''} onClick={() => setActiveView('backtest')}>回测</button>
-        <button className={activeView === 'portfolio' ? 'active' : ''} onClick={() => setActiveView('portfolio')}><Briefcase size={15} />持仓</button>
-      </nav>
-      <div className={`app ${activeView === 'portfolio' ? 'portfolioMode' : ''}`}>
-      <div className={`mobileSheet ${mobileOpen ? 'open' : ''}`} onTouchStart={handleSheetTouchStart} onTouchEnd={handleSheetTouchEnd}>
-        <button
-          className="sheetGrip"
-          onClick={() => setMobileOpen(!mobileOpen)}
-          aria-label={mobileOpen ? '下滑收起配置面板' : '上拉打开资产配置'}
-        >
-          <span className="sheetHandleBars" aria-hidden="true"><i /><i /></span>
-          <span className="sheetHint">{mobileOpen ? '下滑收起配置' : '上拉配置资产'}</span>
-        </button>
-        {panel}
-      </div>
-      <div className="desktopPanel">{panel}</div>
-      <main className="workspace">
-        {activeView === 'backtest' ? (
-          <>
-        <section className="metrics">
-          {strategyResults.map(({ strategy, color, result }) => (
-            <div key={strategy.id} style={{ '--accent': color }}>
-              <span>{strategy.name}</span>
-              <strong>{formatMoney(result.stats.end)}</strong>
-              <em className={result.stats.totalReturn >= 0 ? 'pos' : 'neg'}>{pct(result.stats.totalReturn)} / 回撤 {pct(result.stats.maxDd)}</em>
-            </div>
-          ))}
-        </section>
-        <section className="chartPanel">
-          <div className="chartHeader">
-            <div className="panelTitle"><h2>收益曲线</h2><span>策略或时间变化后自动回测，当前坐标按{chartInterval}展示</span></div>
-            <div className="rangeBar" aria-label="Backtest Range Bar">
-              <input
-                type="date"
-                value={dateRange.start}
-                onInput={(e) => updateDate('start', e.currentTarget.value)}
-                onChange={(e) => updateDate('start', e.currentTarget.value)}
-              />
-              <span>至</span>
-              <input
-                type="date"
-                value={dateRange.end}
-                onInput={(e) => updateDate('end', e.currentTarget.value)}
-                onChange={(e) => updateDate('end', e.currentTarget.value)}
-              />
-              <div className="rangePresets">
-                {rangePresets.map((preset) => <button key={preset.label} onClick={() => applyRangePreset(preset)}>{preset.label}</button>)}
-              </div>
-            </div>
-          </div>
-          <ReactECharts key={`equity-${viewportKey}`} option={equityOption} style={{ height: 330 }} />
-          <div className="seriesNote">回测按 {primaryResult.curve.length.toLocaleString()} 个交易日计算；图表显示 {displayCurve.length.toLocaleString()} 个{chartInterval}末节点。</div>
-        </section>
-        <section>
-          <div className="chartPanel">
-            <div className="panelTitle"><h2>回撤曲线</h2><span>显示多策略最大回撤路径</span></div>
-            <ReactECharts key={`drawdown-${viewportKey}`} option={ddOption} style={{ height: 260 }} />
-          </div>
-        </section>
-          </>
-        ) : portfolioView}
-      </main>
+      <div className="app portfolioMode">
+        <main className="workspace">
+          {portfolioView}
+        </main>
       </div>
       {addHoldingOpen && (
         <div className="modalBackdrop" role="presentation" onMouseDown={() => setAddHoldingOpen(false)}>

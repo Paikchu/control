@@ -14,7 +14,13 @@ import {
   readIbkrSnapshot,
   storeIbkrSync
 } from './src/ibkrSync.mjs';
-import { buildFallbackAiInsights, buildSecAnalysisReport, extractInlineFinancialMetrics, splitFilingSections } from './src/secReport.mjs';
+import {
+  buildFallbackAiInsights,
+  buildSecAnalysisReport,
+  extractInlineFinancialMetrics,
+  normalizeFilingSummary,
+  splitFilingSections
+} from './src/secReport.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.DATA_DIR || join(root, 'data');
@@ -54,6 +60,14 @@ db.exec(`
     accession_number TEXT,
     filed TEXT,
     PRIMARY KEY (ticker, period, metric)
+  );
+
+  CREATE TABLE IF NOT EXISTS sec_filing_summaries (
+    ticker TEXT NOT NULL,
+    accession_number TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (ticker, accession_number)
   )
 `);
 initIbkrTables(db);
@@ -69,6 +83,16 @@ const secCachePut = db.prepare(`
   INSERT INTO sec_cache (cache_key, fetched_at, payload)
   VALUES (?, ?, ?)
   ON CONFLICT(cache_key) DO UPDATE SET fetched_at = excluded.fetched_at, payload = excluded.payload
+`);
+const filingSummaryGet = db.prepare(`
+  SELECT payload
+  FROM sec_filing_summaries
+  WHERE ticker = ? AND accession_number = ?
+`);
+const filingSummaryPut = db.prepare(`
+  INSERT INTO sec_filing_summaries (ticker, accession_number, generated_at, payload)
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(ticker, accession_number) DO NOTHING
 `);
 const latestReportGet = db.prepare('SELECT payload FROM sec_report_versions WHERE ticker = ? ORDER BY generated_at DESC LIMIT 1');
 const reportVersionPut = db.prepare(`
@@ -87,6 +111,22 @@ const reportFactPut = db.prepare(`
     source_tag = excluded.source_tag,
     accession_number = excluded.accession_number,
     filed = excluded.filed
+`);
+
+db.exec(`
+  INSERT OR IGNORE INTO sec_filing_summaries (ticker, accession_number, generated_at, payload)
+  SELECT
+    json_extract(payload, '$.ticker'),
+    json_extract(payload, '$.accessionNumber'),
+    COALESCE(json_extract(payload, '$.generatedAt'), fetched_at),
+    payload
+  FROM sec_cache
+  WHERE cache_key LIKE 'sec:filing-summary:v1:%'
+    AND json_extract(payload, '$.ticker') IS NOT NULL
+    AND json_extract(payload, '$.accessionNumber') IS NOT NULL;
+
+  DELETE FROM sec_cache
+  WHERE cache_key LIKE 'sec:filing-summary:v1:%';
 `);
 
 const dayMs = 24 * 60 * 60 * 1000;
@@ -495,7 +535,12 @@ async function getSecFilings(ticker, limit = 20, force = false) {
   const company = await getSecCompany(clean);
   const cacheKey = `sec:filings:${clean}`;
   const cached = force ? null : cacheRead(cacheKey, secFilingsTtlMs);
-  if (cached) return cached;
+  if (cached) {
+    return {
+      ...cached,
+      filings: (cached.filings || []).slice(0, Math.max(1, Math.min(50, limit)))
+    };
+  }
 
   const response = await secFetch(`https://data.sec.gov/submissions/CIK${company.cik}.json`);
   const payload = await response.json();
@@ -520,7 +565,7 @@ async function getSecFilings(ticker, limit = 20, force = false) {
       indexUrl: filingIndexUrl(filing),
       pdfUrl: `/api/sec/filings/${encodeURIComponent(clean)}/${filing.accessionNumber}.pdf`
     }))
-    .slice(0, Math.max(1, Math.min(50, limit)));
+    .slice(0, 50);
 
   const result = {
     ticker: clean,
@@ -530,7 +575,10 @@ async function getSecFilings(ticker, limit = 20, force = false) {
     fetchedAt: new Date().toISOString()
   };
   cacheWrite(cacheKey, result);
-  return result;
+  return {
+    ...result,
+    filings: result.filings.slice(0, Math.max(1, Math.min(50, limit)))
+  };
 }
 
 async function getSecCompanyFacts(ticker, force = false) {
@@ -771,6 +819,88 @@ async function getAiInsightsForLatestFiling(ticker, filing) {
       sourceQuotes: []
     };
   }
+}
+
+async function analyzeFilingSummaryWithDeepSeek({ ticker, filing, sections }) {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) throw new Error('DEEPSEEK_API_KEY is required for filing summaries');
+
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: secAnalysisModel,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是负责美股基本面研究的资深金融分析师。',
+            '只根据给定 SEC filing 内容输出中文摘要，不使用外部信息，不编造数字。',
+            'headline、label、detail、analystView 所有字段必须使用简体中文；公司名、产品名和 SEC 表格术语可以保留英文。',
+            '优先识别：收入与增长驱动、利润率、现金流与流动性、资本开支、管理层指引、重大交易、融资、诉讼、客户集中度和会计风险。',
+            '8-K 要说明事件是什么、对盈利或资产负债表的影响；10-Q/10-K 要说明业绩变化、质量和关键风险。',
+            '没有证据的维度直接省略。禁止输出“需要复核”“未找到”“建议关注”等空泛措辞。',
+            'headline 必须是一句有方向性的结论。',
+            'bullets 输出 3 至 5 条，每条包含 label、detail、importance；detail 必须带具体事实或明确影响。',
+            'analystView 用一句话说明该 filing 对投资判断的具体含义，不给买卖建议。',
+            '输出 JSON: {"headline":"","bullets":[{"label":"","detail":"","importance":"high|medium|low"}],"analystView":""}'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            ticker,
+            form: filing.form,
+            filingDate: filing.filingDate,
+            reportDate: filing.reportDate,
+            accessionNumber: filing.accessionNumber,
+            sections: sections.slice(0, 7).map((section) => ({
+              name: section.name,
+              text: section.text.slice(0, 4500)
+            }))
+          })
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) throw new Error(`DeepSeek filing summary HTTP ${response.status}`);
+  const payload = await response.json();
+  const content = payload?.choices?.[0]?.message?.content || '';
+  return normalizeFilingSummary({
+    ...parseJsonObject(content),
+    source: 'deepseek',
+    generatedAt: new Date().toISOString()
+  }, filing);
+}
+
+async function getSecFilingSummary(ticker, accessionNumber) {
+  const clean = cleanTicker(ticker);
+  const accession = cleanAccession(accessionNumber);
+  const stored = filingSummaryGet.get(clean, accession);
+  if (stored?.payload) return JSON.parse(stored.payload);
+  if (!process.env.DEEPSEEK_API_KEY) {
+    throw new Error('DEEPSEEK_API_KEY is required for filing summaries');
+  }
+
+  const filingsPayload = await getSecFilings(clean, 50);
+  const filing = filingsPayload.filings.find((item) => item.accessionNumber === accession);
+  if (!filing) throw new Error('SEC filing not found');
+
+  const text = await getFilingText(filing);
+  const sections = splitFilingSections(text);
+  const summary = await analyzeFilingSummaryWithDeepSeek({ ticker: clean, filing, sections });
+  if (!summary.headline && !summary.bullets.length && !summary.analystView) {
+    throw new Error('AI filing summary did not contain usable analysis');
+  }
+
+  filingSummaryPut.run(clean, accession, summary.generatedAt, JSON.stringify(summary));
+  return summary;
 }
 
 async function getInlineMetricsForLatestFiling(filing) {
@@ -1065,6 +1195,22 @@ createServer(async (req, res) => {
     }
     try {
       json(res, 200, await getSecAnalysisReport(ticker, { force }));
+    } catch (error) {
+      json(res, 502, { error: error.message });
+    }
+    return;
+  }
+
+  const secFilingSummaryMatch = url.pathname.match(/^\/api\/sec\/filings\/([^/]+)\/([0-9-]+)\/summary$/);
+  if (secFilingSummaryMatch && req.method === 'GET') {
+    const ticker = cleanTicker(secFilingSummaryMatch[1]);
+    const accession = cleanAccession(secFilingSummaryMatch[2]);
+    if (!ticker || !accession) {
+      json(res, 400, { error: 'Ticker and accession are required' });
+      return;
+    }
+    try {
+      json(res, 200, await getSecFilingSummary(ticker, accession));
     } catch (error) {
       json(res, 502, { error: error.message });
     }

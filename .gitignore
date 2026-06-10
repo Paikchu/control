@@ -8,3 +8,6 @@ clientportal.gw/
 clientportal.beta.gw/
 .DS_Store
 *.log
+.env
+.env.local
+.env.*.local

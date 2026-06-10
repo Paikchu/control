@@ -1,8 +1,8 @@
 {
   "scripts": {
-    "start": "node scripts/start-dev.mjs",
+    "start": "node --env-file-if-exists=.env.local scripts/start-dev.mjs",
     "dev": "vite --host 127.0.0.1",
-    "api": "node server.mjs",
+    "api": "node --env-file-if-exists=.env.local server.mjs",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1"
   },

@@ -45,6 +45,19 @@ function periodKey(item) {
   return `${item.fy || ''}:${item.fp || ''}:${item.end || ''}`;
 }
 
+export function selectCanonicalFinancialQuarters(rows = []) {
+  const byFiscalQuarter = new Map();
+  rows.forEach((row) => {
+    const key = `${row.fy || ''}:${row.fp || ''}`;
+    const current = byFiscalQuarter.get(key);
+    const rowDate = `${row.end || ''}:${row.filed || ''}`;
+    const currentDate = `${current?.end || ''}:${current?.filed || ''}`;
+    if (!current || rowDate.localeCompare(currentDate) > 0) byFiscalQuarter.set(key, row);
+  });
+  return [...byFiscalQuarter.values()]
+    .sort((a, b) => fiscalSortKey(a).localeCompare(fiscalSortKey(b)));
+}
+
 function collectFacts(companyFacts, names) {
   const gaap = companyFacts?.facts?.['us-gaap'] || {};
   for (const tag of names) {
@@ -88,9 +101,8 @@ export function extractFinancialMetrics(companyFacts, limit = 12) {
     });
   });
 
-  const rows = [...periods.values()]
+  const rows = selectCanonicalFinancialQuarters([...periods.values()])
     .filter((row) => Number.isFinite(row.revenue))
-    .sort((a, b) => fiscalSortKey(a).localeCompare(fiscalSortKey(b)))
     .slice(-Math.max(1, limit));
 
   const sameQuarter = new Map();
@@ -414,6 +426,64 @@ export function buildFallbackAiInsights({ sections = [], latestFiling = null }) 
   };
 }
 
+export function selectRenderableAiInsights(ai = {}) {
+  const blockedStatuses = new Set(['not_found', 'needs_review', 'error']);
+  const blockedText = [
+    /did not contain readable text/i,
+    /未定位到明确/i,
+    /未定位到独立/i,
+    /需要.*复核/i,
+    /需.*复核/i,
+    /等待.*复核/i,
+    /未触发文本风险信号/i
+  ];
+  const keep = (item) => {
+    const detail = String(item?.detail || '').trim();
+    if (!detail || blockedStatuses.has(String(item?.status || '').toLowerCase())) return false;
+    return !blockedText.some((pattern) => pattern.test(detail));
+  };
+  return {
+    guidanceChanges: (ai.guidanceChanges || []).filter(keep),
+    riskFlags: (ai.riskFlags || []).filter(keep)
+  };
+}
+
+export function normalizeFilingSummary(summary = {}, filing = {}) {
+  const blockedText = [
+    /did not contain readable text/i,
+    /未找到/i,
+    /未定位到/i,
+    /无法读取/i,
+    /需要.*复核/i,
+    /需.*复核/i,
+    /等待.*复核/i
+  ];
+  const cleanText = (value, maxLength) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+  const isUseful = (value) => value && !blockedText.some((pattern) => pattern.test(value));
+  const bullets = (Array.isArray(summary.bullets) ? summary.bullets : [])
+    .map((item) => ({
+      label: cleanText(item?.label, 24),
+      detail: cleanText(item?.detail, 320),
+      importance: ['high', 'medium', 'low'].includes(item?.importance) ? item.importance : 'medium'
+    }))
+    .filter((item) => item.label && isUseful(item.detail))
+    .slice(0, 4);
+  const headline = cleanText(summary.headline, 180);
+  const analystView = cleanText(summary.analystView, 260);
+
+  return {
+    ticker: String(filing.ticker || '').toUpperCase(),
+    form: String(filing.form || ''),
+    filingDate: String(filing.filingDate || ''),
+    accessionNumber: String(filing.accessionNumber || ''),
+    headline: isUseful(headline) ? headline : '',
+    bullets,
+    analystView: isUseful(analystView) ? analystView : '',
+    source: String(summary.source || 'deepseek'),
+    generatedAt: String(summary.generatedAt || new Date().toISOString())
+  };
+}
+
 function simpleHash(value) {
   let hash = 0;
   for (let i = 0; i < value.length; i += 1) {
@@ -426,9 +496,8 @@ function mergeFinancialMetrics(companyFactsMetrics, inlineMetrics, limit = 12) {
   const byPeriod = new Map();
   companyFactsMetrics.forEach((row) => byPeriod.set(metricPeriodKey(row), row));
   inlineMetrics.forEach((row) => byPeriod.set(metricPeriodKey(row), { ...byPeriod.get(metricPeriodKey(row)), ...row }));
-  return recomputeDerivedMetrics([...byPeriod.values()]
+  return recomputeDerivedMetrics(selectCanonicalFinancialQuarters([...byPeriod.values()])
     .filter((row) => Number.isFinite(row.revenue))
-    .sort((a, b) => fiscalSortKey(a).localeCompare(fiscalSortKey(b)))
     .slice(-Math.max(1, limit)));
 }
 
