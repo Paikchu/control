@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import ReactECharts from 'echarts-for-react';
-import { AlertTriangle, Briefcase, ExternalLink, FileDown, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, Briefcase, ChevronDown, ChevronRight, ExternalLink, FileDown, Link2, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { normalizeEntryPlan, normalizeHoldingItems } from './holdingNotes.mjs';
 import { holdingWeightPercent, summarizeIbkrCash } from './ibkrCash.mjs';
 import { mergePriceData } from './marketSeries.mjs';
@@ -446,6 +446,28 @@ function pct(n, digits = 1) {
   return `${(n * 100).toFixed(digits)}%`;
 }
 
+const indexNumberFormat = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function MarketSparkline({ values }) {
+  if (!Array.isArray(values) || values.length < 2) return null;
+  const width = 72;
+  const height = 30;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const points = values.map((value, index) => [
+    (index / (values.length - 1)) * width,
+    height - 2 - ((value - min) / span) * (height - 4)
+  ]);
+  const line = points.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' ');
+  return (
+    <svg className="marketSparkline" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+      <polygon className="marketSparklineFill" points={`0,${height} ${line} ${width},${height}`} />
+      <polyline className="marketSparklineLine" points={line} fill="none" />
+    </svg>
+  );
+}
+
 function compactMoney(n) {
   if (!Number.isFinite(n)) return 'n/a';
   const abs = Math.abs(n);
@@ -609,6 +631,7 @@ function App() {
   const [ibkrSyncStatus, setIbkrSyncStatus] = useState('idle');
   const [ibkrError, setIbkrError] = useState('');
   const [ibkrPopoverOpen, setIbkrPopoverOpen] = useState(false);
+  const [expandedBroker, setExpandedBroker] = useState('ibkr');
   const [addHoldingOpen, setAddHoldingOpen] = useState(false);
   const [newHoldingTicker, setNewHoldingTicker] = useState('');
   const [newHoldingShares, setNewHoldingShares] = useState('');
@@ -626,6 +649,7 @@ function App() {
   const [showPortfolioOverview, setShowPortfolioOverview] = useState(false);
   const [dailyChanges, setDailyChanges] = useState({});
   const [dailyChangesStatus, setDailyChangesStatus] = useState('idle');
+  const [marketOverview, setMarketOverview] = useState(null);
   const filingSummaryRequests = useRef(new Set());
   const sheetTouchStart = useRef(null);
   const selectedTickers = useMemo(() => {
@@ -1171,6 +1195,26 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    async function loadMarketOverview() {
+      try {
+        const response = await fetch(`${apiBase}/api/market/overview`);
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || '指数行情获取失败');
+        if (!cancelled) setMarketOverview(payload);
+      } catch (error) {
+        // 行情条是辅助信息，失败时保留上一次数据。
+      }
+    }
+    loadMarketOverview();
+    const timer = window.setInterval(loadMarketOverview, 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     const missing = selectedTickers.filter((symbol) => !marketSeries[symbol] && !['loading', 'error'].includes(tickerStatus[symbol]));
     if (!missing.length) return undefined;
 
@@ -1560,11 +1604,19 @@ function App() {
     if (pct >= 1) return '#15803d';
     if (pct >= 0.3) return '#16a34a';
     if (pct > 0) return '#22c55e';
-    if (pct > -0.3) return '#f87171';
+    if (pct > -0.3) return '#fca5a5';
     if (pct > -1) return '#ef4444';
     if (pct > -2) return '#dc2626';
     if (pct > -4) return '#b91c1c';
     return '#991b1b';
+  }
+
+  // Dark text on light-colored blocks, white on dark blocks
+  function labelTextColor(pct) {
+    if (!Number.isFinite(pct)) return '#334155';
+    if (pct > 0 && pct < 0.3) return '#14532d';
+    if (pct > -0.3 && pct <= 0) return '#7f1d1d';
+    return '#ffffff';
   }
 
   function renderSectorHeatmap() {
@@ -1596,6 +1648,7 @@ function App() {
         pnl: item.pnl,
         portfolioPct: item.portfolioPct,
         itemStyle: { color: dailyChangeColor(item.changePct) },
+        label: { color: labelTextColor(item.changePct), textShadowBlur: 0 },
       })),
     }));
 
@@ -1650,8 +1703,7 @@ function App() {
           fontSize: 12,
           fontWeight: 'bold',
           lineHeight: 19,
-          textShadowBlur: 6,
-          textShadowColor: 'rgba(0,0,0,.35)',
+          textShadowBlur: 0,
           overflow: 'truncate',
           formatter: (params) => {
             if (params.data?.children) return '';
@@ -1666,25 +1718,28 @@ function App() {
         },
         upperLabel: {
           show: true,
-          height: 26,
-          color: '#334155',
-          fontSize: 11,
-          fontWeight: 700,
-          backgroundColor: 'rgba(241,245,249,0.92)',
+          height: 30,
+          color: '#0f172a',
+          fontSize: 12,
+          fontWeight: 800,
+          backgroundColor: 'rgba(203,213,225,0.95)',
           borderColor: 'transparent',
-          padding: [5, 10],
+          padding: [6, 12],
+          formatter: (params) => params.name,
         },
         itemStyle: { borderWidth: 1, borderColor: '#f1f5f9', borderRadius: 3, gapWidth: 1 },
         levels: [
           {
-            itemStyle: { borderWidth: 4, borderColor: '#f1f5f9', borderRadius: 6, gapWidth: 4 },
+            itemStyle: { borderWidth: 4, borderColor: '#e2e8f0', borderRadius: 6, gapWidth: 4 },
             upperLabel: {
               show: true,
-              height: 28,
-              color: '#1e293b',
-              fontSize: 11,
+              height: 30,
+              color: '#0f172a',
+              fontSize: 12,
               fontWeight: 800,
-              backgroundColor: 'rgba(241,245,249,0.96)',
+              backgroundColor: 'rgba(203,213,225,0.95)',
+              padding: [6, 12],
+              formatter: (params) => params.name,
             },
           },
           { itemStyle: { borderWidth: 1, borderColor: 'rgba(255,255,255,.25)', borderRadius: 3, gapWidth: 1 }, label: { show: true } },
@@ -1797,6 +1852,7 @@ function App() {
           </div>
           <div className="holdingTabs" role="tablist" aria-label="持仓详情页签">
             <button className={holdingTab === 'thesis' ? 'active' : ''} onClick={() => setHoldingTab('thesis')} role="tab" aria-selected={holdingTab === 'thesis'}>持仓逻辑</button>
+            <button className={holdingTab === 'entry' ? 'active' : ''} onClick={() => setHoldingTab('entry')} role="tab" aria-selected={holdingTab === 'entry'}>建仓计划</button>
             <button className={holdingTab === 'fundamentals' ? 'active' : ''} onClick={() => setHoldingTab('fundamentals')} role="tab" aria-selected={holdingTab === 'fundamentals'}>基本面</button>
             <button className={holdingTab === 'sec' ? 'active' : ''} onClick={() => setHoldingTab('sec')} role="tab" aria-selected={holdingTab === 'sec'}>SEC 报告</button>
           </div>
@@ -1872,6 +1928,9 @@ function App() {
                 </button>
               </section>
 
+            </div>
+          ) : holdingTab === 'entry' ? (
+            <div className="holdingThesisWorkspace">
               <section className="entryPlan" aria-labelledby={`entry-plan-title-${holding.id}`}>
                 <div className="holdingEditorHead">
                   <span id={`entry-plan-title-${holding.id}`}>建仓计划</span>
@@ -2012,63 +2071,100 @@ function App() {
             <span>{displayedPortfolio.length} 个持仓 · 总资产 {formatMoney(portfolioTotalValue)}</span>
           </div>
         </div>
-        {ibkrCashSummary.cashBalance !== null && (
-          <div className="portfolioCash" title="IBKR Ledger 基准币现金；币种明细不重复计入">
-            <span>IBKR 现金</span>
-            <strong>{formatMoney(ibkrCashSummary.cashBalance)}</strong>
-            {ibkrCashSummary.currencyBalances.length > 0 && (
-              <small>
-                {ibkrCashSummary.currencyBalances.map((balance) => (
-                  `${balance.currency} ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(balance.cashBalance)}`
-                )).join(' · ')}
-              </small>
-            )}
-          </div>
-        )}
-        <label className="holdingSearch">
-          <Search size={18} aria-hidden="true" />
-          <input
-            value={holdingQuery}
-            onChange={(event) => setHoldingQuery(event.target.value)}
-            placeholder="搜索股票或公司"
-            aria-label="搜索持仓"
-          />
-        </label>
+        <div className="marketStrip" aria-label="美股大盘行情">
+          {(marketOverview?.indices?.length ? marketOverview.indices : []).map((index) => {
+            const up = index.change >= 0;
+            return (
+              <div key={index.symbol} className={`marketTile ${up ? 'up' : 'down'}`}>
+                <div className="marketTileInfo">
+                  <span className="marketTileName">{index.name}</span>
+                  <strong>{indexNumberFormat.format(index.price)}</strong>
+                  <span className="marketTileChange">
+                    {up ? <ArrowUp size={11} aria-hidden="true" /> : <ArrowDown size={11} aria-hidden="true" />}
+                    {up ? '+' : ''}{index.changePercent.toFixed(2)}%
+                    <small>({up ? '+' : ''}{indexNumberFormat.format(index.change)})</small>
+                  </span>
+                </div>
+                <MarketSparkline values={index.sparkline} />
+              </div>
+            );
+          })}
+          {!marketOverview?.indices?.length && <span className="marketStripEmpty">大盘行情加载中…</span>}
+        </div>
         <div className="portfolioUtility">
-          <button className={`ibkrStatusButton ${hasIbkrAccess ? 'connected' : ''}`} onClick={() => setIbkrPopoverOpen((open) => !open)} aria-expanded={ibkrPopoverOpen}>
-            <Briefcase size={14} />
-            {hasIbkrAccess ? 'IBKR 已连接' : ibkrStatus.gateway === 'offline' ? 'IBKR 未运行' : 'IBKR 登录'}
+          <button className={`brokerConnectButton ${hasIbkrAccess ? 'connected' : ''}`} onClick={() => setIbkrPopoverOpen((open) => !open)} aria-expanded={ibkrPopoverOpen}>
+            <Link2 size={14} />
+            账户连接
+            {hasIbkrAccess && <span className="brokerConnectDot" />}
           </button>
           {ibkrPopoverOpen && (
-            <div className={`ibkrPanel ibkrPopover ${hasIbkrAccess ? 'connected' : ''}`}>
-              <div>
-                <strong>{hasIbkrAccess ? 'IBKR 已连接' : ibkrStatus.gateway === 'offline' ? 'IBKR Gateway 未运行' : '需要登录 IBKR'}</strong>
-                <span>
-                  {ibkrSnapshot?.lastSyncAt ? `最后同步 ${new Date(ibkrSnapshot.lastSyncAt).toLocaleString('zh-CN')}` : '未同步账户持仓'}
-                </span>
+            <div className="brokerHubPopover">
+              <div className="brokerHubHeader">
+                <Link2 size={14} />
+                <span>券商连接</span>
               </div>
-              <div className="ibkrActions">
-                {ibkrAccounts.length > 0 && (
-                  <select value={selectedIbkrAccount} onChange={(event) => changeIbkrAccount(event.target.value)}>
-                    {ibkrAccounts.map((account) => (
-                      <option key={account.accountId} value={account.accountId}>{account.accountTitle || account.accountId}</option>
-                    ))}
-                  </select>
-                )}
-                <a className="ibkrLoginLink" href={ibkrStatus.loginUrl || 'https://localhost:5001'} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开登录页</a>
-                <button className="iconTextButton" onClick={refreshIbkr} disabled={ibkrSyncStatus === 'syncing'}>
-                  <RefreshCw size={14} />
-                  {ibkrSyncStatus === 'syncing' ? '同步中' : '刷新状态'}
-                </button>
-                {hasIbkrAccess && (
-                  <button className="iconTextButton ibkrDisconnectBtn" onClick={disconnectIbkr}>
-                    断开连接
+              <div className="brokerList">
+                {/* IBKR */}
+                <div className={`brokerCard ${hasIbkrAccess ? 'connected' : ''}`}>
+                  <button className="brokerCardHeader" onClick={() => setExpandedBroker(expandedBroker === 'ibkr' ? null : 'ibkr')}>
+                    <div className="brokerCardMeta">
+                      <Briefcase size={15} />
+                      <div>
+                        <strong>Interactive Brokers</strong>
+                        <span>{hasIbkrAccess ? '已连接' : ibkrStatus.gateway === 'offline' ? 'Gateway 未运行' : '需要登录'}</span>
+                      </div>
+                    </div>
+                    <div className="brokerCardRight">
+                      {hasIbkrAccess && <span className="brokerStatusDot connected" />}
+                      {expandedBroker === 'ibkr' ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </div>
                   </button>
-                )}
+                  {expandedBroker === 'ibkr' && (
+                    <div className="brokerCardBody">
+                      <span className="brokerSyncTime">
+                        {ibkrSnapshot?.lastSyncAt ? `最后同步 ${new Date(ibkrSnapshot.lastSyncAt).toLocaleString('zh-CN')}` : '未同步账户持仓'}
+                      </span>
+                      <div className="ibkrActions">
+                        {ibkrAccounts.length > 0 && (
+                          <select value={selectedIbkrAccount} onChange={(event) => changeIbkrAccount(event.target.value)}>
+                            {ibkrAccounts.map((account) => (
+                              <option key={account.accountId} value={account.accountId}>{account.accountTitle || account.accountId}</option>
+                            ))}
+                          </select>
+                        )}
+                        <a className="ibkrLoginLink" href={ibkrStatus.loginUrl || 'https://localhost:5001'} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开登录页</a>
+                        <button className="iconTextButton" onClick={refreshIbkr} disabled={ibkrSyncStatus === 'syncing'}>
+                          <RefreshCw size={14} />
+                          {ibkrSyncStatus === 'syncing' ? '同步中' : '刷新状态'}
+                        </button>
+                        {hasIbkrAccess && (
+                          <button className="iconTextButton ibkrDisconnectBtn" onClick={disconnectIbkr}>
+                            断开连接
+                          </button>
+                        )}
+                      </div>
+                      {(ibkrError || (!hasIbkrAccess && ibkrStatus.gateway !== 'offline')) && (
+                        <p className="brokerCardError">{ibkrError || '完成 IBKR 2FA 后点击刷新状态。'}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {/* Placeholder brokers — future integrations */}
+                {[{ id: 'alpaca', label: 'Alpaca' }, { id: 'tiger', label: '老虎证券' }].map((broker) => (
+                  <div key={broker.id} className="brokerCard disabled">
+                    <div className="brokerCardHeader">
+                      <div className="brokerCardMeta">
+                        <Link2 size={15} />
+                        <div>
+                          <strong>{broker.label}</strong>
+                          <span>即将支持</span>
+                        </div>
+                      </div>
+                      <span className="brokerComingSoon">敬请期待</span>
+                    </div>
+                  </div>
+                ))}
               </div>
-              {(ibkrError || (!hasIbkrAccess && ibkrStatus.gateway !== 'offline')) && (
-                <p>{ibkrError || '完成 IBKR 2FA 后点击刷新状态。'}</p>
-              )}
             </div>
           )}
         </div>
@@ -2082,6 +2178,15 @@ function App() {
             </div>
             <button onClick={addHolding}><Plus size={16} />添加</button>
           </div>
+          <label className="holdingSearch">
+            <Search size={16} aria-hidden="true" />
+            <input
+              value={holdingQuery}
+              onChange={(event) => setHoldingQuery(event.target.value)}
+              placeholder="搜索股票或公司"
+              aria-label="搜索持仓"
+            />
+          </label>
           <button
             className={`portfolioOverviewCard ${showPortfolioOverview ? 'active' : ''}`}
             onClick={() => setShowPortfolioOverview((v) => !v)}
@@ -2143,6 +2248,10 @@ function App() {
                   <button className="holdingSelect" onClick={() => selectHolding(holding.id)} aria-pressed={isOpen}>
                     <span className="holdingTicker">{holding.symbol || 'TICKER'} <em>{isIbkr ? 'IBKR' : '本地'}</em></span>
                     <small>{holding.name || holding.symbol}</small>
+                    <span className="holdingMeta">
+                      {holding.shares != null && <span>数量 {holding.shares}</span>}
+                      {Number.isFinite(cost) && cost > 0 && <span>成本 {isIbkr ? cost.toFixed(1) : holding.cost}</span>}
+                    </span>
                   </button>
                   <button className="holdingValue" onClick={() => selectHolding(holding.id)} aria-pressed={isOpen}>
                     <strong>{formatMoney(marketValue)}</strong>
@@ -2157,27 +2266,6 @@ function App() {
                       <Trash2 size={14} />
                     </button>
                   ) : <span className="holdingLock" aria-hidden="true"></span>}
-                  <div className="holdingQuickEdit">
-                    <label>
-                      <span>数量</span>
-                      <input inputMode="decimal" value={holding.shares} readOnly={isIbkr} onFocus={() => setExpandedHolding(holding.id)} onChange={(e) => updateHolding(holding.id, 'shares', e.target.value)} aria-label={`${holding.symbol} 股数`} />
-                    </label>
-                    <label>
-                      <span>成本</span>
-                      <input
-                        inputMode="decimal"
-                        value={isIbkr && Number.isFinite(cost) ? cost.toFixed(1) : holding.cost}
-                        readOnly={isIbkr}
-                        onFocus={() => setExpandedHolding(holding.id)}
-                        onBlur={(e) => {
-                          const value = Number(e.target.value);
-                          if (!isIbkr && Number.isFinite(value)) updateHolding(holding.id, 'cost', value.toFixed(1));
-                        }}
-                        onChange={(e) => updateHolding(holding.id, 'cost', e.target.value)}
-                        aria-label={`${holding.symbol} 成本`}
-                      />
-                    </label>
-                  </div>
                 </article>
               );
             })}
