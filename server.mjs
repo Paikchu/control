@@ -479,6 +479,68 @@ async function getPrices(ticker) {
   return { ...payload, source: 'yahoo' };
 }
 
+const marketIndices = [
+  { symbol: '^DJI', name: 'Dow Jones' },
+  { symbol: '^GSPC', name: 'S&P 500' },
+  { symbol: '^IXIC', name: 'Nasdaq' },
+  { symbol: '^RUT', name: 'Russell' },
+  { symbol: '^VIX', name: 'VIX' }
+];
+const marketOverviewTtlMs = 60 * 1000;
+
+async function fetchIndexQuote({ symbol, name }) {
+  const params = new URLSearchParams({ range: '1d', interval: '5m', includePrePost: 'false' });
+  const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${params}`, {
+    headers: {
+      accept: 'application/json',
+      'user-agent': 'Mozilla/5.0 PortfolioBacktest/0.1'
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`Yahoo Finance HTTP ${response.status}`);
+  }
+
+  const result = (await response.json())?.chart?.result?.[0];
+  const meta = result?.meta || {};
+  const closes = (result?.indicators?.quote?.[0]?.close || []).filter((value) => Number.isFinite(value));
+  const price = Number.isFinite(meta.regularMarketPrice) ? meta.regularMarketPrice : closes[closes.length - 1];
+  const previousClose = Number.isFinite(meta.chartPreviousClose) ? meta.chartPreviousClose : meta.previousClose;
+  if (!Number.isFinite(price) || !Number.isFinite(previousClose) || previousClose === 0) {
+    throw new Error(`No quote for ${symbol}`);
+  }
+
+  return {
+    symbol,
+    name,
+    price,
+    previousClose,
+    change: price - previousClose,
+    changePercent: ((price - previousClose) / previousClose) * 100,
+    marketTime: Number.isFinite(meta.regularMarketTime) ? new Date(meta.regularMarketTime * 1000).toISOString() : null,
+    sparkline: closes.map((value) => Number(value.toFixed(4)))
+  };
+}
+
+async function getMarketOverview() {
+  const cacheKey = 'market:overview:v1';
+  const cached = cacheRead(cacheKey, marketOverviewTtlMs);
+  if (cached) return cached;
+
+  const results = await Promise.allSettled(marketIndices.map(fetchIndexQuote));
+  const indices = results.map((result) => (result.status === 'fulfilled' ? result.value : null)).filter(Boolean);
+  if (indices.length < marketIndices.length) {
+    const stale = cacheRead(cacheKey, dayMs);
+    if (stale && stale.indices.length > indices.length) return stale;
+  }
+  if (!indices.length) {
+    throw new Error('指数行情获取失败');
+  }
+
+  const payload = { indices, fetchedAt: new Date().toISOString() };
+  cacheWrite(cacheKey, payload);
+  return payload;
+}
+
 async function getSecTickerMap() {
   const cacheKey = 'sec:ticker-map';
   const cached = cacheRead(cacheKey, secTickerTtlMs);
@@ -1092,6 +1154,15 @@ createServer(async (req, res) => {
   }
 
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (url.pathname === '/api/market/overview' && req.method === 'GET') {
+    try {
+      json(res, 200, await getMarketOverview());
+    } catch (error) {
+      json(res, 502, { error: error.message });
+    }
+    return;
+  }
 
   if (url.pathname === '/api/ibkr/status' && req.method === 'GET') {
     json(res, 200, {
