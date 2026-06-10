@@ -50,6 +50,23 @@ const defaultPortfolio = [
 ];
 
 const portfolioStorageKey = 'portfolio-backtest:holdings:v1';
+
+const sectorByTicker = {
+  AAPL: '科技', AMD: '科技', AVGO: '科技', CRWD: '科技', DELL: '科技',
+  GOOGL: '通信', GOOG: '通信', META: '通信', NOK: '通信',
+  MSFT: '科技', NVDA: '科技', NOW: '科技', SMCI: '科技', TSEM: '科技',
+  MSTR: '科技', LITE: '科技',
+  AMZN: '消费/零售', COST: '消费/零售', TSLA: '消费/汽车',
+  NFLX: '通信', PLTR: '科技', ASTS: '通信', SATS: '通信',
+  VRT: '工业',
+  QQQ: 'ETF', SPY: 'ETF', VOO: 'ETF', VTI: 'ETF', VT: 'ETF',
+  VUG: 'ETF', VTV: 'ETF', VGT: 'ETF', VNQ: 'ETF', VXUS: 'ETF',
+  TQQQ: 'ETF',
+  TLT: '债券', BND: '债券', AGG: '债券', SHY: '债券', IEF: '债券',
+  SGOV: '债券', BOXX: '债券',
+  GLD: '黄金', IAU: '黄金',
+  CASH: '现金',
+};
 const ibkrAccountStorageKey = 'portfolio-backtest:ibkr-account:v1';
 
 const companyNameByTicker = {
@@ -606,6 +623,9 @@ function App() {
   const [filingSummaryStatus, setFilingSummaryStatus] = useState({});
   const [holdingTab, setHoldingTab] = useState('thesis');
   const [holdingQuery, setHoldingQuery] = useState('');
+  const [showPortfolioOverview, setShowPortfolioOverview] = useState(false);
+  const [dailyChanges, setDailyChanges] = useState({});
+  const [dailyChangesStatus, setDailyChangesStatus] = useState('idle');
   const filingSummaryRequests = useRef(new Set());
   const sheetTouchStart = useRef(null);
   const selectedTickers = useMemo(() => {
@@ -877,6 +897,29 @@ function App() {
 
   function selectHolding(holdingId) {
     setExpandedHolding(holdingId);
+    setShowPortfolioOverview(false);
+  }
+
+  async function fetchDailyChanges() {
+    const symbols = displayedPortfolio.map((h) => h.symbol).filter(Boolean);
+    if (!symbols.length) return;
+    setDailyChangesStatus('loading');
+    const results = {};
+    await Promise.all(symbols.map(async (symbol) => {
+      try {
+        const response = await fetch(`${apiBase}/api/prices/${encodeURIComponent(symbol)}`);
+        const payload = await response.json();
+        if (!response.ok || !Array.isArray(payload.rows) || payload.rows.length < 2) return;
+        const rows = payload.rows;
+        const last = rows[rows.length - 1];
+        const prev = rows[rows.length - 2];
+        if (last?.close && prev?.close) {
+          results[symbol] = { changePct: (last.close / prev.close - 1) * 100, close: last.close };
+        }
+      } catch (_) {}
+    }));
+    setDailyChanges(results);
+    setDailyChangesStatus('loaded');
   }
 
   async function loadIbkrStatus({ preserveError = false } = {}) {
@@ -957,6 +1000,14 @@ function App() {
   function changeIbkrAccount(accountId) {
     setSelectedIbkrAccount(accountId);
     syncIbkrPositions(accountId);
+  }
+
+  function disconnectIbkr() {
+    setIbkrAccounts([]);
+    setIbkrSnapshot(null);
+    setIbkrStatus({ gateway: 'offline', authenticated: false, message: '' });
+    setIbkrError('');
+    setIbkrPopoverOpen(false);
   }
 
   function addHolding() {
@@ -1150,7 +1201,7 @@ function App() {
   }, [expandedHolding, displayedPortfolio]);
 
   useEffect(() => {
-    if (holdingTab !== 'sec' || !expandedHolding) return undefined;
+    if (!['sec', 'fundamentals'].includes(holdingTab) || !expandedHolding) return undefined;
     const holding = displayedPortfolio.find((item) => item.id === expandedHolding);
     const ticker = holding?.symbol?.trim().toUpperCase();
     const filings = secFilings[ticker]?.filings || [];
@@ -1181,6 +1232,12 @@ function App() {
     }, 3 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, [expandedHolding, displayedPortfolio]);
+
+  useEffect(() => {
+    if (showPortfolioOverview && dailyChangesStatus === 'idle') {
+      fetchDailyChanges();
+    }
+  }, [showPortfolioOverview]);
 
   useEffect(() => {
     let frame = 0;
@@ -1496,6 +1553,227 @@ function App() {
     );
   }
 
+  function dailyChangeColor(pct) {
+    if (!Number.isFinite(pct)) return '#e2e8f0';
+    if (pct >= 4) return '#14532d';
+    if (pct >= 2) return '#166534';
+    if (pct >= 1) return '#15803d';
+    if (pct >= 0.3) return '#16a34a';
+    if (pct > 0) return '#22c55e';
+    if (pct > -0.3) return '#f87171';
+    if (pct > -1) return '#ef4444';
+    if (pct > -2) return '#dc2626';
+    if (pct > -4) return '#b91c1c';
+    return '#991b1b';
+  }
+
+  function renderSectorHeatmap() {
+    const totalValue = portfolioTotalValue;
+    const sectorMap = {};
+    displayedPortfolio.forEach((holding) => {
+      const mv = Number(holding.marketValue) || (Number(holding.shares) || 0) * (Number(holding.marketPrice ?? holding.cost) || 0);
+      if (!mv) return;
+      const sector = sectorByTicker[holding.symbol] || '其他';
+      if (!sectorMap[sector]) sectorMap[sector] = [];
+      const daily = dailyChanges[holding.symbol];
+      const changePct = daily?.changePct ?? null;
+      const pnl = Number(holding.unrealizedPnl);
+      sectorMap[sector].push({
+        name: holding.symbol,
+        value: mv,
+        changePct,
+        pnl: Number.isFinite(pnl) ? pnl : 0,
+        portfolioPct: totalValue > 0 ? (mv / totalValue * 100) : 0,
+      });
+    });
+
+    const treemapData = Object.entries(sectorMap).map(([sector, items]) => ({
+      name: sector,
+      children: items.map((item) => ({
+        name: item.name,
+        value: item.value,
+        changePct: item.changePct,
+        pnl: item.pnl,
+        portfolioPct: item.portfolioPct,
+        itemStyle: { color: dailyChangeColor(item.changePct) },
+      })),
+    }));
+
+    const heatmapOption = {
+      animation: true,
+      animationDuration: 500,
+      animationEasing: 'cubicOut',
+      animationDurationUpdate: 350,
+      animationEasingUpdate: 'cubicInOut',
+      backgroundColor: 'transparent',
+      tooltip: {
+        formatter: (params) => {
+          if (!params.data?.value || params.treePathInfo?.length < 2) return '';
+          const { name, value, changePct, portfolioPct, pnl } = params.data;
+          const changeStr = Number.isFinite(changePct)
+            ? `<span style="color:${changePct >= 0 ? '#15803d' : '#dc2626'};font-weight:700">${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%</span>`
+            : '<span style="color:#94a3b8">n/a</span>';
+          const pnlStr = Number.isFinite(pnl) && pnl !== 0
+            ? `<br/><span style="color:#64748b">总盈亏</span> <span style="color:${pnl >= 0 ? '#15803d' : '#dc2626'}">${pnl >= 0 ? '+' : ''}${formatMoney(pnl)}</span>`
+            : '';
+          return `<div style="font-family:var(--font-body);padding:2px 0">` +
+            `<strong style="color:#0f172a;font-size:14px">${name}</strong><br/>` +
+            `<span style="color:#64748b">日涨跌</span> ${changeStr}<br/>` +
+            `<span style="color:#64748b">市值</span> <span style="color:#1e293b">${formatMoney(value)}</span><br/>` +
+            `<span style="color:#64748b">仓位</span> <span style="color:#1e293b">${portfolioPct?.toFixed(2)}%</span>${pnlStr}` +
+            `</div>`;
+        },
+        backgroundColor: '#ffffff',
+        borderColor: '#e2e8f0',
+        borderWidth: 1,
+        textStyle: { color: '#1e293b', fontSize: 12 },
+        extraCssText: 'border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,.12);',
+      },
+      series: [{
+        type: 'treemap',
+        data: treemapData,
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        width: '100%',
+        height: '100%',
+        roam: false,
+        nodeClick: false,
+        breadcrumb: { show: false },
+        label: {
+          show: true,
+          position: 'inside',
+          verticalAlign: 'middle',
+          align: 'center',
+          color: '#ffffff',
+          fontSize: 12,
+          fontWeight: 'bold',
+          lineHeight: 19,
+          textShadowBlur: 6,
+          textShadowColor: 'rgba(0,0,0,.35)',
+          overflow: 'truncate',
+          formatter: (params) => {
+            if (params.data?.children) return '';
+            const { name, changePct, portfolioPct } = params.data;
+            if (!portfolioPct || portfolioPct < 0.6) return '';
+            const changeStr = Number.isFinite(changePct)
+              ? `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`
+              : '';
+            if (portfolioPct < 1.5) return name;
+            return changeStr ? `${name}\n${changeStr}` : name;
+          },
+        },
+        upperLabel: {
+          show: true,
+          height: 26,
+          color: '#334155',
+          fontSize: 11,
+          fontWeight: 700,
+          backgroundColor: 'rgba(241,245,249,0.92)',
+          borderColor: 'transparent',
+          padding: [5, 10],
+        },
+        itemStyle: { borderWidth: 1, borderColor: '#f1f5f9', borderRadius: 3, gapWidth: 1 },
+        levels: [
+          {
+            itemStyle: { borderWidth: 4, borderColor: '#f1f5f9', borderRadius: 6, gapWidth: 4 },
+            upperLabel: {
+              show: true,
+              height: 28,
+              color: '#1e293b',
+              fontSize: 11,
+              fontWeight: 800,
+              backgroundColor: 'rgba(241,245,249,0.96)',
+            },
+          },
+          { itemStyle: { borderWidth: 1, borderColor: 'rgba(255,255,255,.25)', borderRadius: 3, gapWidth: 1 }, label: { show: true } },
+        ],
+      }],
+    };
+
+    const cashValue = ibkrCashSummary.cashBalance ?? 0;
+    const stocksValue = portfolioMarketValue;
+    const totalDayChange = displayedPortfolio.reduce((sum, h) => {
+      const d = dailyChanges[h.symbol];
+      if (!d) return sum;
+      const mv = Number(h.marketValue) || (Number(h.shares) || 0) * (Number(h.marketPrice ?? h.cost) || 0);
+      return sum + mv * (d.changePct / 100);
+    }, 0);
+    const totalDayChangePct = stocksValue > 0 ? (totalDayChange / stocksValue) * 100 : null;
+
+    return (
+      <article className="holdingDetail holdingDetailDesktop overviewPane" aria-label="账户总览">
+        <div className="holdingDetailHeader overviewHeader">
+          <div className="overviewHeaderLeft">
+            <span className="overviewHeaderTitle">账户总览</span>
+            {dailyChangesStatus === 'loading' && <span className="overviewLoadingBadge">更新中…</span>}
+            {dailyChangesStatus === 'loaded' && Number.isFinite(totalDayChangePct) && (
+              <span className={`overviewDayBadge ${totalDayChangePct >= 0 ? 'pos' : 'neg'}`}>
+                今日 {totalDayChangePct >= 0 ? '+' : ''}{totalDayChangePct.toFixed(2)}%
+                {' '}({totalDayChange >= 0 ? '+' : ''}{formatMoney(totalDayChange)})
+              </span>
+            )}
+          </div>
+          <div className="overviewHeaderRight">
+            <button className="overviewRefreshBtn" onClick={() => { setDailyChangesStatus('idle'); fetchDailyChanges(); }}>
+              刷新行情
+            </button>
+            <button className="addAssetButton" onClick={() => setShowPortfolioOverview(false)}>
+              返回持仓
+            </button>
+          </div>
+        </div>
+        <div className="holdingTabBody overviewBody">
+          <div className="overviewSummaryRow">
+            <div className="overviewStat">
+              <span>总资产</span>
+              <strong>{formatMoney(portfolioTotalValue)}</strong>
+            </div>
+            {cashValue > 0 && (
+              <div className="overviewStat">
+                <span>现金</span>
+                <strong>{formatMoney(cashValue)}</strong>
+              </div>
+            )}
+            <div className="overviewStat">
+              <span>股票市值</span>
+              <strong>{formatMoney(stocksValue)}</strong>
+            </div>
+            {Number.isFinite(totalDayChangePct) && (
+              <div className="overviewStat">
+                <span>今日变动</span>
+                <strong className={totalDayChangePct >= 0 ? 'gain' : 'loss'}>
+                  {totalDayChangePct >= 0 ? '+' : ''}{totalDayChangePct.toFixed(2)}%
+                </strong>
+              </div>
+            )}
+            <div className="overviewStatChart">
+              <ReactECharts option={{
+                animation: false,
+                tooltip: { trigger: 'item', formatter: '{b}: {d}%', backgroundColor: '#ffffff', textStyle: { color: '#1e293b', fontSize: 12 }, borderColor: '#e2e8f0', extraCssText: 'border-radius:8px;box-shadow:0 4px 12px rgba(15,23,42,.1);' },
+                series: [{
+                  type: 'pie',
+                  radius: ['52%', '80%'],
+                  data: [
+                    { name: '股票', value: stocksValue, itemStyle: { color: '#3b82f6' } },
+                    ...(cashValue > 0 ? [{ name: '现金', value: cashValue, itemStyle: { color: '#64748b' } }] : []),
+                  ],
+                  label: { show: false },
+                  emphasis: { scale: false },
+                }],
+              }} style={{ height: 90, width: 90 }} notMerge />
+            </div>
+          </div>
+          <div className="overviewHeatmapWrap">
+            <span className="overviewHeatmapLabel">行业热力图 · 面积 = 仓位占比 · 颜色 = 今日涨跌</span>
+            <ReactECharts option={heatmapOption} style={{ height: '100%', width: '100%' }} notMerge />
+          </div>
+        </div>
+      </article>
+    );
+  }
+
   function renderHoldingDetail(holding, className = '') {
     if (!holding) return null;
     const ticker = holding.symbol.trim().toUpperCase();
@@ -1511,15 +1789,15 @@ function App() {
     return (
       <article key={holding.id} className={`holdingDetail ${className}`.trim()} aria-label="持仓详情" data-holding-detail={ticker}>
         <div className="holdingDetailHeader">
-          <div className="detailHero">
-            <div>
-              <span>{ticker || 'TICKER'}{isIbkr ? ' / IBKR' : ''}</span>
-              <h3>{holding.name || '未命名持仓'}</h3>
-            </div>
-            <strong>{formatMoney(marketValue)}</strong>
+          <div className="holdingDetailMeta">
+            <span className="holdingDetailTicker">{ticker}</span>
+            {filingPayload?.company?.name && filingPayload.company.name !== ticker && (
+              <span className="holdingDetailCompany">{filingPayload.company.name}</span>
+            )}
           </div>
           <div className="holdingTabs" role="tablist" aria-label="持仓详情页签">
             <button className={holdingTab === 'thesis' ? 'active' : ''} onClick={() => setHoldingTab('thesis')} role="tab" aria-selected={holdingTab === 'thesis'}>持仓逻辑</button>
+            <button className={holdingTab === 'fundamentals' ? 'active' : ''} onClick={() => setHoldingTab('fundamentals')} role="tab" aria-selected={holdingTab === 'fundamentals'}>基本面</button>
             <button className={holdingTab === 'sec' ? 'active' : ''} onClick={() => setHoldingTab('sec')} role="tab" aria-selected={holdingTab === 'sec'}>SEC 报告</button>
           </div>
         </div>
@@ -1638,14 +1916,13 @@ function App() {
                 </div>
               </section>
             </div>
-          ) : (
+          ) : holdingTab === 'fundamentals' ? (
             <div className="secTabPane">
               {ticker && renderSecAnalysisReport(ticker)}
+            </div>
+          ) : (
+            <div className="secTabPane">
               <div className="secFilingPanel">
-                <div className="secFilingHead">
-                  <span>SEC 文件</span>
-                  <em>{filingPayload?.company?.name || ticker}</em>
-                </div>
                 {filingStatus === 'loading' && <p className="secFilingState">正在获取 10-K / 10-Q / 8-K...</p>}
                 {filingStatus === 'error' && <p className="secFilingState">自动获取失败，可先用 SEC 搜索打开。</p>}
                 {filingStatus !== 'loading' && filingPayload?.filings?.length === 0 && <p className="secFilingState">未找到 10-K / 10-Q / 8-K。</p>}
@@ -1783,6 +2060,11 @@ function App() {
                   <RefreshCw size={14} />
                   {ibkrSyncStatus === 'syncing' ? '同步中' : '刷新状态'}
                 </button>
+                {hasIbkrAccess && (
+                  <button className="iconTextButton ibkrDisconnectBtn" onClick={disconnectIbkr}>
+                    断开连接
+                  </button>
+                )}
               </div>
               {(ibkrError || (!hasIbkrAccess && ibkrStatus.gateway !== 'offline')) && (
                 <p>{ibkrError || '完成 IBKR 2FA 后点击刷新状态。'}</p>
@@ -1800,6 +2082,47 @@ function App() {
             </div>
             <button onClick={addHolding}><Plus size={16} />添加</button>
           </div>
+          <button
+            className={`portfolioOverviewCard ${showPortfolioOverview ? 'active' : ''}`}
+            onClick={() => setShowPortfolioOverview((v) => !v)}
+            aria-pressed={showPortfolioOverview}
+          >
+            <div className="overviewCardLeft">
+              <ReactECharts option={{
+                animation: false,
+                series: [{
+                  type: 'pie',
+                  radius: ['46%', '78%'],
+                  data: [
+                    { name: '股票', value: portfolioMarketValue, itemStyle: { color: '#1d4ed8' } },
+                    ...(ibkrCashSummary.cashBalance > 0 ? [{ name: '现金', value: ibkrCashSummary.cashBalance, itemStyle: { color: '#64748b' } }] : []),
+                  ],
+                  label: { show: false },
+                  emphasis: { scale: false },
+                }],
+              }} style={{ height: 52, width: 52 }} notMerge />
+            </div>
+            <div className="overviewCardRight">
+              <span>账户总览分析</span>
+              <div className="overviewCardStats">
+                <div>
+                  <em>总资产</em>
+                  <strong>{formatMoney(portfolioTotalValue)}</strong>
+                </div>
+                {ibkrCashSummary.cashBalance > 0 && (
+                  <div>
+                    <em>现金</em>
+                    <strong>{formatMoney(ibkrCashSummary.cashBalance)}</strong>
+                  </div>
+                )}
+                <div>
+                  <em>股票</em>
+                  <strong>{formatMoney(portfolioMarketValue)}</strong>
+                </div>
+              </div>
+            </div>
+            <span className="overviewCardArrow" aria-hidden="true">›</span>
+          </button>
           <div className="holdingTable" role="table" aria-label="持仓表">
             <div className="holdingTableHeader" role="row">
               <span>股票</span>
@@ -1808,7 +2131,7 @@ function App() {
               <span></span>
             </div>
             {filteredPortfolio.map((holding, index) => {
-              const isOpen = expandedHolding === holding.id;
+              const isOpen = !showPortfolioOverview && expandedHolding === holding.id;
               const isIbkr = holding.source === 'ibkr';
               const marketValue = Number(holding.marketValue) || (Number(holding.shares) || 0) * (Number(holding.marketPrice ?? holding.cost) || 0);
               const weightPercent = holdingWeightPercent(marketValue, portfolioTotalValue);
@@ -1863,11 +2186,9 @@ function App() {
         </aside>
 
         <section className="researchPane" aria-label="研究面板">
-          <div className="researchPaneLabel">
-            <span>Research</span>
-            <em>{selectedHolding?.symbol || '—'}</em>
-          </div>
-          {renderHoldingDetail(selectedHolding, 'holdingDetailDesktop')}
+          {showPortfolioOverview
+            ? renderSectorHeatmap()
+            : renderHoldingDetail(selectedHolding, 'holdingDetailDesktop')}
         </section>
       </div>
     </section>
