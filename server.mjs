@@ -68,8 +68,56 @@ db.exec(`
     generated_at TEXT NOT NULL,
     payload TEXT NOT NULL,
     PRIMARY KEY (ticker, accession_number)
+  );
+
+  CREATE TABLE IF NOT EXISTS sec_filing_extracts (
+    ticker            TEXT NOT NULL,
+    accession_number  TEXT NOT NULL,
+    form              TEXT,
+    filing_date       TEXT,
+    report_date       TEXT,
+    kind              TEXT NOT NULL,
+    label             TEXT NOT NULL,
+    period            TEXT,
+    value             REAL,
+    unit              TEXT,
+    detail            TEXT,
+    quote             TEXT,
+    importance        TEXT,
+    generated_at      TEXT NOT NULL,
+    PRIMARY KEY (ticker, accession_number, kind, label, period)
+  );
+
+  CREATE TABLE IF NOT EXISTS sec_filing_extract_status (
+    ticker            TEXT NOT NULL,
+    accession_number  TEXT NOT NULL,
+    status            TEXT NOT NULL,
+    reason            TEXT,
+    updated_at        TEXT NOT NULL,
+    PRIMARY KEY (ticker, accession_number)
+  );
+
+  CREATE TABLE IF NOT EXISTS holding_thesis_checks (
+    ticker                   TEXT NOT NULL,
+    thesis_hash              TEXT NOT NULL,
+    latest_accession_number  TEXT NOT NULL,
+    thesis_text              TEXT,
+    payload                  TEXT NOT NULL,
+    generated_at             TEXT NOT NULL,
+    PRIMARY KEY (ticker, thesis_hash, latest_accession_number)
   )
 `);
+
+try {
+  db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS sec_filing_chunks USING fts5(
+    ticker, accession_number, form, filing_date, section, chunk_text
+  )`);
+} catch {
+  db.exec(`CREATE TABLE IF NOT EXISTS sec_filing_chunks (
+    ticker TEXT, accession_number TEXT, form TEXT, filing_date TEXT,
+    section TEXT, chunk_text TEXT
+  )`);
+}
 initIbkrTables(db);
 
 const cacheGet = db.prepare('SELECT fetched_at, payload FROM price_cache WHERE ticker = ? AND range_key = ?');
@@ -113,6 +161,38 @@ const reportFactPut = db.prepare(`
     filed = excluded.filed
 `);
 
+db.exec(`CREATE INDEX IF NOT EXISTS idx_extracts_ticker ON sec_filing_extracts(ticker, kind)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_extract_status_ticker ON sec_filing_extract_status(ticker)`);
+
+const extractStatusGet = db.prepare(`SELECT status FROM sec_filing_extract_status WHERE ticker = ? AND accession_number = ?`);
+const extractStatusPut = db.prepare(`
+  INSERT INTO sec_filing_extract_status (ticker, accession_number, status, reason, updated_at)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT(ticker, accession_number) DO UPDATE SET
+    status = excluded.status, reason = excluded.reason, updated_at = excluded.updated_at
+`);
+const extractPut = db.prepare(`
+  INSERT INTO sec_filing_extracts
+    (ticker, accession_number, form, filing_date, report_date, kind, label, period, value, unit, detail, quote, importance, generated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(ticker, accession_number, kind, label, period) DO UPDATE SET
+    value = excluded.value, unit = excluded.unit, detail = excluded.detail,
+    quote = excluded.quote, importance = excluded.importance, generated_at = excluded.generated_at
+`);
+const extractsGetByTicker = db.prepare(`
+  SELECT * FROM sec_filing_extracts WHERE ticker = ? ORDER BY filing_date DESC, kind
+`);
+const thesisCheckGet = db.prepare(`
+  SELECT payload FROM holding_thesis_checks
+  WHERE ticker = ? AND thesis_hash = ? AND latest_accession_number = ?
+`);
+const thesisCheckPut = db.prepare(`
+  INSERT INTO holding_thesis_checks (ticker, thesis_hash, latest_accession_number, thesis_text, payload, generated_at)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(ticker, thesis_hash, latest_accession_number) DO UPDATE SET
+    thesis_text = excluded.thesis_text, payload = excluded.payload, generated_at = excluded.generated_at
+`);
+
 db.exec(`
   INSERT OR IGNORE INTO sec_filing_summaries (ticker, accession_number, generated_at, payload)
   SELECT
@@ -137,9 +217,36 @@ const secDocumentTtlMs = 7 * dayMs;
 const port = Number(process.env.PORT || 8787);
 const ibkrBaseUrl = process.env.IBKR_BASE_URL || 'https://127.0.0.1:5001/v1/api';
 const secUserAgent = process.env.SEC_USER_AGENT || 'PortfolioBacktest/0.1 max@local.invalid';
-const secForms = new Set(['10-K', '10-Q', '8-K']);
-const secAnalysisModel = process.env.DEEPSEEK_SEC_MODEL || 'deepseek-v4-pro';
-const strategyModel = process.env.DEEPSEEK_STRATEGY_MODEL || 'deepseek-v4-pro';
+const secFormsBusiness = new Set(['10-K', '10-Q', '8-K', '10-K/A', '10-Q/A', '8-K/A']);
+const secFormsInsider  = new Set(['3', '4', '5', '3/A', '4/A', '5/A']);
+function isBusinessFiling(form) { return secFormsBusiness.has(form); }
+function isInsiderFiling(form)  { return secFormsInsider.has(form); }
+function isTrackedFiling(form)  { return isBusinessFiling(form) || isInsiderFiling(form); }
+
+const secAnalysisModel = process.env.DEEPSEEK_SEC_MODEL || 'deepseek-chat';
+const strategyModel = process.env.DEEPSEEK_STRATEGY_MODEL || 'deepseek-chat';
+
+let _secQueueRunning = false;
+const _secQueue = [];
+function secQueueFetch(url, accept) {
+  return new Promise((resolve, reject) => {
+    _secQueue.push({ url, accept, resolve, reject });
+    if (!_secQueueRunning) _drainSecQueue();
+  });
+}
+async function _drainSecQueue() {
+  _secQueueRunning = true;
+  while (_secQueue.length > 0) {
+    const { url, accept, resolve, reject } = _secQueue.shift();
+    try {
+      resolve(await secFetch(url, accept));
+    } catch (err) {
+      reject(err);
+    }
+    if (_secQueue.length > 0) await new Promise((r) => setTimeout(r, 150));
+  }
+  _secQueueRunning = false;
+}
 
 function json(res, status, body) {
   res.writeHead(status, {
@@ -620,7 +727,7 @@ async function getSecFilings(ticker, limit = 20, force = false) {
       primaryDocument: recent.primaryDocument?.[index] || '',
       description: recent.primaryDocDescription?.[index] || ''
     }))
-    .filter((filing) => secForms.has(filing.form) && filing.primaryDocument)
+    .filter((filing) => isBusinessFiling(filing.form) && filing.primaryDocument)
     .map((filing) => ({
       ...filing,
       documentUrl: filingDocumentUrl(filing),
@@ -975,6 +1082,253 @@ async function getInlineMetricsForLatestFiling(filing) {
   }
 }
 
+function simpleHash32(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+function extractHtmlTables(html) {
+  const tables = [];
+  const re = /<table[\s>][\s\S]*?<\/table>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const tableHtml = m[0];
+    const start = Math.max(0, m.index - 300);
+    const ctx = html.slice(start, m.index);
+    const titleMatch = ctx.match(/(?:<(?:h[1-6]|p|div|td|th)[^>]*>)([^<]{4,120})<\/(?:h[1-6]|p|div|td|th)>\s*$/i);
+    const caption = tableHtml.match(/<caption[^>]*>([\s\S]*?)<\/caption>/i);
+    const title = (caption ? htmlToText(caption[1]) : titleMatch ? htmlToText(titleMatch[1]) : '').slice(0, 120).trim();
+    const text = htmlToText(tableHtml).replace(/[ \t]+/g, ' ').trim();
+    if (text.length > 40) tables.push({ title, text: text.slice(0, 4000) });
+  }
+  return tables;
+}
+
+async function getFilingIndexDocuments(filing) {
+  try {
+    const resp = await secQueueFetch(filing.indexUrl, 'text/html,application/json,*/*');
+    const text = await resp.text();
+    const docs = [];
+    const re = /href="(\/Archives\/edgar\/data\/[^"]+\.(htm|html|txt))"[^>]*>\s*([^<]+)<\/a>[\s\S]*?<td[^>]*>([^<]*EX-99[^<]*|[^<]*exhibit 99[^<]*)<\/td>/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      docs.push({ url: `https://www.sec.gov${m[1]}`, description: m[4].trim() });
+    }
+    return docs;
+  } catch {
+    return [];
+  }
+}
+
+async function extractForm4Data(filing) {
+  try {
+    const resp = await secQueueFetch(filing.documentUrl, 'text/xml,application/xml,*/*');
+    const xml = await resp.text();
+    const getTag = (tag, src) => { const m = src.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i')); return m ? m[1].trim() : ''; };
+    const getAllTags = (tag, src) => { const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi'); const r = []; let m; while ((m = re.exec(src)) !== null) r.push(m[1]); return r; };
+
+    const ownerName = getTag('rptOwnerName', xml) || getTag('issuerName', xml);
+    const ownerTitle = getTag('officerTitle', xml);
+    const isDirector = /<isDirector>1/.test(xml);
+    const is10b51 = /<datesExercisableAndExpiration|<planName>/.test(xml);
+    const generatedAt = new Date().toISOString();
+
+    const items = [];
+    for (const txn of getAllTags('nonDerivativeTransaction', xml)) {
+      const code = getTag('transactionCode', txn);
+      const shares = parseFloat(getTag('transactionShares', txn).replace(/[^0-9.-]/g, '')) || 0;
+      const price = parseFloat(getTag('transactionPricePerShare', txn).replace(/[^0-9.-]/g, '')) || 0;
+      const sharesAfter = parseFloat(getTag('sharesOwnedFollowingTransaction', txn).replace(/[^0-9.-]/g, '')) || 0;
+      if (!code || shares === 0) continue;
+      const label = `Insider ${code === 'S' ? 'sale' : code === 'P' ? 'purchase' : `transaction (${code})`} - ${ownerName}`;
+      const detail = `${ownerName}${ownerTitle ? ` (${ownerTitle})` : ''} — code ${code}, ${shares.toLocaleString()} shares @ $${price.toFixed(2)}, holding after: ${sharesAfter.toLocaleString()}${is10b51 ? ' [10b5-1 plan]' : ''}`;
+      items.push({ label, detail, code, shares, price, sharesAfter, is10b51, isDirector });
+    }
+    return { ownerName, items, generatedAt };
+  } catch {
+    return null;
+  }
+}
+
+async function extractFilingWithDeepSeek(filing, tables, sections) {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) return [];
+
+  const tablesSample = tables.slice(0, 8).map((t, i) => ({ i, title: t.title, text: t.text.slice(0, 1800) }));
+  const sectionsSample = sections.slice(0, 5).map((s) => ({ name: s.name, text: s.text.slice(0, 1500) }));
+
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: secAnalysisModel,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是美股 SEC 财报数据提取专家。只根据给定内容提取数据，禁止编造。',
+            '每个提取结果必须有 quote 字段引用原文（不超过 80 字符）。',
+            '数字必须保留原始量级，识别表头中的 "in thousands/millions" 并在 unit 里注明。',
+            '括号数字表示负值。分部收入、KPI、指引是最重要的提取目标。',
+            '输出 JSON: {"extracts": [{"kind":"financial|segment|kpi|guidance|event","label":"指标名","period":"2025 Q2","value":null,"unit":"USD millions","detail":"中文说明","quote":"原文引用","importance":"high|medium|low"}]}'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            ticker: filing.ticker, form: filing.form, filingDate: filing.filingDate,
+            accessionNumber: filing.accessionNumber,
+            tables: tablesSample, sections: sectionsSample
+          })
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) return [];
+  try {
+    const payload = await response.json();
+    const content = payload?.choices?.[0]?.message?.content || '';
+    const parsed = parseJsonObject(content);
+    return Array.isArray(parsed.extracts) ? parsed.extracts : [];
+  } catch {
+    return [];
+  }
+}
+
+async function persistFilingChunks(filing, sections) {
+  try {
+    db.prepare('DELETE FROM sec_filing_chunks WHERE ticker = ? AND accession_number = ?')
+      .run(filing.ticker, filing.accessionNumber);
+    const insertChunk = db.prepare(
+      'INSERT INTO sec_filing_chunks (ticker, accession_number, form, filing_date, section, chunk_text) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    for (const section of sections) {
+      const text = section.text || '';
+      for (let offset = 0; offset < text.length; offset += 1400) {
+        const chunk = text.slice(offset, offset + 1500);
+        if (chunk.trim().length > 30) {
+          insertChunk.run(filing.ticker, filing.accessionNumber, filing.form, filing.filingDate, section.name, chunk);
+        }
+      }
+    }
+  } catch {
+  }
+}
+
+async function ensureFilingExtracted(filing) {
+  const existing = extractStatusGet.get(filing.ticker, filing.accessionNumber);
+  if (existing?.status === 'done' || existing?.status === 'pending') return;
+
+  extractStatusPut.run(filing.ticker, filing.accessionNumber, 'pending', null, new Date().toISOString());
+
+  try {
+    const generatedAt = new Date().toISOString();
+
+    if (isInsiderFiling(filing.form)) {
+      const data = await extractForm4Data(filing);
+      if (!data || data.items.length === 0) {
+        extractStatusPut.run(filing.ticker, filing.accessionNumber, 'skipped', 'no transactions', generatedAt);
+        return;
+      }
+      for (const item of data.items) {
+        extractPut.run(
+          filing.ticker, filing.accessionNumber, filing.form, filing.filingDate, filing.reportDate,
+          'event', item.label, filing.filingDate,
+          item.shares, 'shares', item.detail, '', 'high', generatedAt
+        );
+      }
+      extractStatusPut.run(filing.ticker, filing.accessionNumber, 'done', null, generatedAt);
+      return;
+    }
+
+    const raw = await getFilingRaw(filing);
+    const text = htmlToText(raw);
+    const tables = extractHtmlTables(raw);
+    const sections = splitFilingSections(text);
+
+    let extraAttachments = [];
+    if (filing.form === '8-K' || filing.form === '8-K/A') {
+      extraAttachments = await getFilingIndexDocuments(filing);
+    }
+
+    let allTables = [...tables];
+    for (const att of extraAttachments.slice(0, 3)) {
+      try {
+        const attResp = await secQueueFetch(att.url, 'text/html,*/*');
+        const attHtml = await attResp.text();
+        const attTables = extractHtmlTables(attHtml);
+        allTables = [...allTables, ...attTables];
+        const attText = htmlToText(attHtml);
+        const attSections = splitFilingSections(attText);
+        for (const sec of attSections) {
+          const existing2 = sections.find((s) => s.name === sec.name);
+          if (existing2) existing2.text += '\n' + sec.text;
+          else sections.push(sec);
+        }
+      } catch {
+      }
+    }
+
+    const aiExtracts = await extractFilingWithDeepSeek(filing, allTables, sections);
+    await persistFilingChunks(filing, sections);
+
+    let savedCount = 0;
+    for (const item of aiExtracts) {
+      if (!item.kind || !item.label) continue;
+      extractPut.run(
+        filing.ticker, filing.accessionNumber, filing.form, filing.filingDate, filing.reportDate,
+        String(item.kind).slice(0, 30),
+        String(item.label).slice(0, 200),
+        String(item.period || '').slice(0, 30),
+        Number.isFinite(Number(item.value)) ? Number(item.value) : null,
+        String(item.unit || '').slice(0, 50),
+        String(item.detail || '').slice(0, 500),
+        String(item.quote || '').slice(0, 300),
+        String(item.importance || 'medium').slice(0, 10),
+        generatedAt
+      );
+      savedCount++;
+    }
+
+    const status = savedCount > 0 ? 'done' : 'skipped';
+    const reason = savedCount > 0 ? null : 'no extracts returned';
+    extractStatusPut.run(filing.ticker, filing.accessionNumber, status, reason, generatedAt);
+  } catch (err) {
+    extractStatusPut.run(filing.ticker, filing.accessionNumber, 'error', err.message.slice(0, 200), new Date().toISOString());
+  }
+}
+
+const _prefetchInFlight = new Set();
+
+async function prefetchTickerFilings(ticker) {
+  if (_prefetchInFlight.has(ticker)) return;
+  _prefetchInFlight.add(ticker);
+  try {
+    const [businessFilings, allFilingsPayload] = await Promise.all([
+      getSecFilings(ticker, 8),
+      getSecFilings(ticker, 50)
+    ]);
+    const insiderFilings = allFilingsPayload.filings
+      .filter((f) => isInsiderFiling(f.form))
+      .slice(0, 20);
+
+    const toExtract = [...businessFilings.filings.slice(0, 8), ...insiderFilings];
+    for (const filing of toExtract) {
+      await ensureFilingExtracted(filing);
+    }
+  } catch {
+  } finally {
+    _prefetchInFlight.delete(ticker);
+  }
+}
+
 async function downloadFilingPdf(ticker, accessionNumber) {
   const clean = cleanTicker(ticker);
   const accession = cleanAccession(accessionNumber);
@@ -997,6 +1351,95 @@ async function downloadFilingPdf(ticker, accessionNumber) {
   const pdf = await createPdfBuffer({ title, subtitle, sourceUrl: filing.documentUrl, text });
   cacheWrite(cacheKey, { base64: pdf.toString('base64'), filing, sourceUrl: filing.documentUrl });
   return { filing, pdf, source: 'sec' };
+}
+
+function thesisHash(thesisItems, riskItems) {
+  const str = JSON.stringify({ t: thesisItems.map((i) => i.text), r: riskItems.map((i) => i.text) });
+  return simpleHash32(str);
+}
+
+async function runThesisCheck(ticker, thesisItems, riskItems) {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) throw new Error('DEEPSEEK_API_KEY is required for thesis checks');
+
+  const extracts = extractsGetByTicker.all(ticker);
+
+  const kwResponse = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: secAnalysisModel,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: '从用户的中文持仓逻辑中提取用于检索英文 SEC filing 的关键词和指标名。输出 JSON: {"keywords": ["英文词1","英文词2"]}' },
+        { role: 'user', content: JSON.stringify({ thesisItems: thesisItems.map((i) => i.text) }) }
+      ]
+    })
+  });
+  let keywords = [];
+  if (kwResponse.ok) {
+    try {
+      const kwPayload = await kwResponse.json();
+      const kwContent = parseJsonObject(kwPayload?.choices?.[0]?.message?.content || '');
+      keywords = Array.isArray(kwContent.keywords) ? kwContent.keywords.slice(0, 8) : [];
+    } catch {
+    }
+  }
+
+  let relevantChunks = [];
+  if (keywords.length > 0) {
+    try {
+      const ftsQuery = keywords.map((k) => `"${k.replace(/"/g, '')}"`).join(' OR ');
+      relevantChunks = db.prepare(
+        `SELECT ticker, accession_number, section, chunk_text FROM sec_filing_chunks WHERE ticker = ? AND sec_filing_chunks MATCH ? LIMIT 12`
+      ).all(ticker, ftsQuery);
+    } catch {
+      relevantChunks = db.prepare(
+        `SELECT ticker, accession_number, section, chunk_text FROM sec_filing_chunks WHERE ticker = ? LIMIT 12`
+      ).all(ticker);
+    }
+  }
+
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: secAnalysisModel,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是专业的投资逻辑验证助手。根据给定的 SEC filing 结构化数据和原文段落，对每条持仓逻辑进行自洽性和时效性验证。',
+            '自洽性：把每条逻辑拆成前提 → 结论，判断 ① 前提是否属实（有 filing 证据），② 前提能否推出结论。',
+            '时效性：用最新 filing 判断逻辑现在是否成立，是否有变化。',
+            '输出信号，不给买卖建议。数字和结论必须有 quote 溯源，无证据判 no_evidence 不得编造。',
+            '输出 JSON: {"items":[{"thesisId":"","verdict":"supported|weakened|broken|no_evidence","consistency":"consistent|self_contradictory|premise_false","confidence":0.0,"premises":[{"claim":"","holds":true,"note":"","evidenceRef":0}],"analysis":"中文","changes":"中文","retrieval":{"keywords":[],"hitFilings":[]},"evidence":[{"accessionNumber":"","period":"","metric":"","quote":""}]}],"crossItemConflicts":[{"between":[],"detail":""}],"coverage":{"filingsUsed":0,"filingsExpected":8}}'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            ticker,
+            thesisItems,
+            riskItems,
+            extracts: extracts.slice(0, 120),
+            relevantChunks: relevantChunks.map((c) => ({ accessionNumber: c.accession_number, section: c.section, text: c.chunk_text.slice(0, 800) })),
+            keywords
+          })
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) throw new Error(`DeepSeek thesis-check HTTP ${response.status}`);
+  const payload = await response.json();
+  const content = payload?.choices?.[0]?.message?.content || '';
+  const result = parseJsonObject(content);
+  result.coverage = result.coverage || { filingsUsed: extracts.length, filingsExpected: 8 };
+  return result;
 }
 
 function safeFilename(value) {
@@ -1304,6 +1747,56 @@ createServer(async (req, res) => {
         'content-length': String(pdf.length),
         'content-disposition': `attachment; filename="${filename}"`
       });
+    } catch (error) {
+      json(res, 502, { error: error.message });
+    }
+    return;
+  }
+
+  const prefetchMatch = url.pathname.match(/^\/api\/holdings\/([^/]+)\/prefetch$/);
+  if (prefetchMatch && req.method === 'POST') {
+    const ticker = cleanTicker(prefetchMatch[1]);
+    if (!ticker) { json(res, 400, { error: 'Ticker is required' }); return; }
+    json(res, 202, { ticker, status: 'queued' });
+    prefetchTickerFilings(ticker).catch(() => {});
+    return;
+  }
+
+  const thesisCheckMatch = url.pathname.match(/^\/api\/holdings\/([^/]+)\/thesis-check$/);
+  if (thesisCheckMatch && req.method === 'POST') {
+    const ticker = cleanTicker(thesisCheckMatch[1]);
+    if (!ticker) { json(res, 400, { error: 'Ticker is required' }); return; }
+    try {
+      const body = await readJson(req);
+      const thesisItems = Array.isArray(body.thesisItems) ? body.thesisItems.filter((i) => i?.text?.trim()) : [];
+      const riskItems = Array.isArray(body.riskItems) ? body.riskItems.filter((i) => i?.text?.trim()) : [];
+      const force = Boolean(body.force);
+      if (thesisItems.length === 0) { json(res, 400, { error: 'thesisItems is required' }); return; }
+
+      const hash = thesisHash(thesisItems, riskItems);
+      const latestExtract = db.prepare(
+        `SELECT accession_number FROM sec_filing_extract_status WHERE ticker = ? AND status = 'done' ORDER BY updated_at DESC LIMIT 1`
+      ).get(ticker);
+      const latestAccession = latestExtract?.accession_number || 'none';
+
+      if (!force) {
+        const cached = thesisCheckGet.get(ticker, hash, latestAccession);
+        if (cached?.payload) {
+          json(res, 200, { ...JSON.parse(cached.payload), cached: true });
+          return;
+        }
+      }
+
+      prefetchTickerFilings(ticker).catch(() => {});
+      const result = await runThesisCheck(ticker, thesisItems, riskItems);
+      const generatedAt = new Date().toISOString();
+      thesisCheckPut.run(
+        ticker, hash, latestAccession,
+        JSON.stringify({ thesisItems, riskItems }),
+        JSON.stringify(result),
+        generatedAt
+      );
+      json(res, 200, { ...result, generatedAt, cached: false });
     } catch (error) {
       json(res, 502, { error: error.message });
     }

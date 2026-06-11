@@ -651,6 +651,11 @@ function App() {
   const [dailyChangesStatus, setDailyChangesStatus] = useState('idle');
   const [marketOverview, setMarketOverview] = useState(null);
   const filingSummaryRequests = useRef(new Set());
+  const [thesisChecks, setThesisChecks] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('portfolio-backtest:thesis-checks:v1') || '{}'); } catch { return {}; }
+  });
+  const [thesisCheckStatus, setThesisCheckStatus] = useState({});
+  const [expandedThesisItem, setExpandedThesisItem] = useState({});
   const sheetTouchStart = useRef(null);
   const selectedTickers = useMemo(() => {
     const symbols = new Set();
@@ -1078,6 +1083,7 @@ function App() {
     setExpandedHolding(id);
     setAddHoldingOpen(false);
     setAddHoldingStatus('');
+    fetch(`${apiBase}/api/holdings/${symbol}/prefetch`, { method: 'POST' }).catch(() => {});
   }
 
   function removeHolding(holdingId) {
@@ -1142,6 +1148,31 @@ function App() {
       setFilingSummaryStatus((current) => ({ ...current, [key]: 'error' }));
     } finally {
       filingSummaryRequests.current.delete(key);
+    }
+  }
+
+  function persistThesisChecks(next) {
+    setThesisChecks(next);
+    try { localStorage.setItem('portfolio-backtest:thesis-checks:v1', JSON.stringify(next)); } catch {}
+  }
+
+  async function runHoldingThesisCheck(holding, force = false) {
+    const ticker = holding.symbol.trim().toUpperCase();
+    const thesisItems = (holding.thesisItems || []).filter((i) => i.text?.trim());
+    if (thesisItems.length === 0) return;
+    setThesisCheckStatus((s) => ({ ...s, [ticker]: 'loading' }));
+    try {
+      const resp = await fetch(`${apiBase}/api/holdings/${encodeURIComponent(ticker)}/thesis-check`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ thesisItems, riskItems: holding.riskItems || [], force })
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || '检验失败');
+      persistThesisChecks((prev) => ({ ...prev, [ticker]: { ...data, checkedAt: new Date().toISOString() } }));
+      setThesisCheckStatus((s) => ({ ...s, [ticker]: 'loaded' }));
+    } catch (err) {
+      setThesisCheckStatus((s) => ({ ...s, [ticker]: 'error:' + err.message }));
     }
   }
 
@@ -1841,6 +1872,25 @@ function App() {
     const entryPlan = normalizeEntryPlan(holding.entryPlan);
     const plannedShares = entryPlan.batches * entryPlan.sharesPerBatch;
 
+    const checkResult = thesisChecks[ticker];
+    const checkSt = thesisCheckStatus[ticker] || 'idle';
+    const isChecking = checkSt === 'loading';
+    const itemResults = checkResult?.items || [];
+    const countSupported = itemResults.filter((r) => r.verdict === 'supported' && r.consistency === 'consistent').length;
+    const countWeak = itemResults.filter((r) => r.verdict !== 'supported' || r.consistency !== 'consistent').length;
+    const conflicts = checkResult?.crossItemConflicts || [];
+    const coverage = checkResult?.coverage;
+
+    const verdictLabel = (r) => {
+      if (!r) return null;
+      if (r.consistency === 'self_contradictory') return { text: '自相矛盾', cls: 'thesisBadgeWarn' };
+      if (r.consistency === 'premise_false' || r.verdict === 'broken') return { text: '前提不成立', cls: 'thesisBadgeDanger' };
+      if (r.verdict === 'weakened') return { text: '逻辑减弱', cls: 'thesisBadgeWarn' };
+      if (r.verdict === 'no_evidence') return { text: '无 filing 证据', cls: 'thesisBadgeNeutral' };
+      if (r.verdict === 'supported') return { text: '自洽·有据', cls: 'thesisBadgeOk' };
+      return null;
+    };
+
     return (
       <article key={holding.id} className={`holdingDetail ${className}`.trim()} aria-label="持仓详情" data-holding-detail={ticker}>
         <div className="holdingDetailHeader">
@@ -1859,76 +1909,191 @@ function App() {
         </div>
         <div className="holdingTabBody" key={`${holding.id}-${holdingTab}`}>
           {holdingTab === 'thesis' ? (
-            <div className="holdingThesisWorkspace">
-              <section className="holdingListEditor" aria-labelledby={`thesis-title-${holding.id}`}>
-                <div className="holdingEditorHead">
-                  <span id={`thesis-title-${holding.id}`}>持仓逻辑</span>
-                </div>
-                {thesisItems.length > 0 ? (
-                  <ul className="holdingReminderList">
-                    {thesisItems.map((item, index) => (
-                      <li className="holdingReminderRow" key={item.id}>
-                        <span className="reminderBullet" aria-hidden="true" />
-                        <input
-                          value={item.text}
-                          placeholder={`持仓逻辑 ${index + 1}`}
-                          onChange={(event) => updateHoldingItem(holding, 'thesisItems', item.id, event.target.value)}
-                          aria-label={`持仓逻辑 ${index + 1}`}
-                        />
-                        <button
-                          className="reminderDelete"
-                          onClick={() => removeHoldingItem(holding, 'thesisItems', item.id)}
-                          aria-label={`删除持仓逻辑 ${index + 1}`}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="holdingListEmpty">还没有持仓逻辑。</p>
-                )}
-                <button className="holdingAddItem" onClick={() => addHoldingItem(holding, 'thesisItems')}>
-                  <Plus size={14} />
-                  添加一条
-                </button>
-              </section>
+              <div className="holdingThesisWorkspace">
+                <section className="holdingListEditor" aria-labelledby={`thesis-title-${holding.id}`}>
+                  <div className="holdingEditorHead thesisEditorHead">
+                    <span id={`thesis-title-${holding.id}`}>持仓逻辑</span>
+                    <div className="thesisAiToolbar">
+                      {checkResult && (
+                        <>
+                          {countSupported > 0 && <span className="thesisSumChip thesisSumOk">{countSupported} 自洽</span>}
+                          {countWeak > 0 && <span className="thesisSumChip thesisSumWarn">{countWeak} 存疑</span>}
+                          {checkResult.checkedAt && (
+                            <span className="thesisCheckedAt">
+                              {(() => { const m = Math.floor((Date.now() - new Date(checkResult.checkedAt)) / 60000); return m < 1 ? '刚刚检验' : m < 60 ? `${m} 分钟前` : `${Math.floor(m / 60)} 小时前`; })()}
+                            </span>
+                          )}
+                        </>
+                      )}
+                      <button
+                        className="thesisCheckBtn"
+                        disabled={isChecking || thesisItems.length === 0}
+                        onClick={() => runHoldingThesisCheck(holding, false)}
+                        aria-label="AI 检验逻辑"
+                      >
+                        {isChecking ? '检验中…' : 'AI 检验逻辑'}
+                      </button>
+                      {checkResult && !isChecking && (
+                        <button className="thesisReCheckBtn" onClick={() => runHoldingThesisCheck(holding, true)} aria-label="重新检验" title="强制重新检验">↺</button>
+                      )}
+                    </div>
+                  </div>
 
-              <section className="holdingListEditor riskListEditor" aria-labelledby={`risk-title-${holding.id}`}>
-                <div className="holdingEditorHead">
-                  <span id={`risk-title-${holding.id}`}>风险点</span>
-                </div>
-                {riskItems.length > 0 ? (
-                  <ul className="holdingReminderList">
-                    {riskItems.map((item, index) => (
-                      <li className="holdingReminderRow" key={item.id}>
-                        <span className="reminderBullet" aria-hidden="true" />
-                        <input
-                          value={item.text}
-                          placeholder={`风险点 ${index + 1}`}
-                          onChange={(event) => updateHoldingItem(holding, 'riskItems', item.id, event.target.value)}
-                          aria-label={`风险点 ${index + 1}`}
-                        />
-                        <button
-                          className="reminderDelete"
-                          onClick={() => removeHoldingItem(holding, 'riskItems', item.id)}
-                          aria-label={`删除风险点 ${index + 1}`}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="holdingListEmpty">还没有风险点。</p>
-                )}
-                <button className="holdingAddItem" onClick={() => addHoldingItem(holding, 'riskItems')}>
-                  <Plus size={14} />
-                  添加一条
-                </button>
-              </section>
+                  {checkSt.startsWith('error:') && (
+                    <p className="thesisCheckError">{checkSt.replace('error:', '')}</p>
+                  )}
 
-            </div>
+                  {thesisItems.length > 0 ? (
+                    <ul className="holdingReminderList thesisCheckedList">
+                      {thesisItems.map((item, index) => {
+                        const result = itemResults.find((r) => r.thesisId === item.id);
+                        const badge = verdictLabel(result);
+                        const isExpanded = expandedThesisItem[item.id];
+                        const rowCls = badge
+                          ? (badge.cls === 'thesisBadgeOk' ? 'holdingReminderRow thesisRowOk'
+                            : badge.cls === 'thesisBadgeWarn' ? 'holdingReminderRow thesisRowWarn'
+                            : badge.cls === 'thesisBadgeDanger' ? 'holdingReminderRow thesisRowDanger'
+                            : 'holdingReminderRow')
+                          : 'holdingReminderRow';
+                        return (
+                          <li key={item.id}>
+                            <div className={rowCls}>
+                              <span className="reminderBullet" aria-hidden="true" />
+                              <input
+                                value={item.text}
+                                placeholder={`持仓逻辑 ${index + 1}`}
+                                onChange={(event) => updateHoldingItem(holding, 'thesisItems', item.id, event.target.value)}
+                                aria-label={`持仓逻辑 ${index + 1}`}
+                              />
+                              {badge && (
+                                <button
+                                  className={`thesisBadge ${badge.cls}`}
+                                  onClick={() => setExpandedThesisItem((p) => ({ ...p, [item.id]: !p[item.id] }))}
+                                  aria-expanded={isExpanded}
+                                  aria-label={`查看分析：${badge.text}`}
+                                >
+                                  {badge.text}
+                                </button>
+                              )}
+                              {isChecking && !badge && <span className="thesisBadge thesisBadgePending">检验中</span>}
+                              <button
+                                className="reminderDelete"
+                                onClick={() => removeHoldingItem(holding, 'thesisItems', item.id)}
+                                aria-label={`删除持仓逻辑 ${index + 1}`}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+
+                            {isExpanded && result && (
+                              <div className="thesisDrawer">
+                                {result.premises?.length > 0 && (
+                                  <div className="thesisDrawerBlock">
+                                    <div className="thesisDrawerLabel">论据拆解</div>
+                                    {result.premises.map((p, pi) => (
+                                      <div key={pi} className={`thesisPremiseRow ${p.holds ? 'thesisPremiseOk' : 'thesisPremiseFail'}`}>
+                                        <span className="thesisPremiseIcon" aria-hidden="true">{p.holds ? '✓' : '✗'}</span>
+                                        <span className="thesisPremiseText">{p.claim}{p.note ? <em> — {p.note}</em> : null}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {result.analysis && (
+                                  <div className="thesisDrawerBlock">
+                                    <div className="thesisDrawerLabel">AI 判断</div>
+                                    <p className="thesisDrawerText">{result.analysis}</p>
+                                    {result.changes && <p className="thesisDrawerChanges">{result.changes}</p>}
+                                  </div>
+                                )}
+                                {result.retrieval?.keywords?.length > 0 && (
+                                  <div className="thesisDrawerBlock thesisRetrieval">
+                                    <span className="thesisDrawerLabel">Agent 检索</span>
+                                    <span className="thesisRetrievalKeywords">{result.retrieval.keywords.join(' · ')}</span>
+                                  </div>
+                                )}
+                                {result.evidence?.length > 0 && (
+                                  <div className="thesisDrawerBlock">
+                                    <div className="thesisDrawerLabel">证据</div>
+                                    {result.evidence.map((ev, ei) => (
+                                      <div key={ei} className="thesisEvidenceRow">
+                                        <a
+                                          href={`${apiBase}/api/sec/filings/${encodeURIComponent(ticker)}/${ev.accessionNumber}.pdf`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="thesisEvidenceLink"
+                                        >
+                                          {ev.accessionNumber}{ev.period ? ` · ${ev.period}` : ''}{ev.metric ? ` · ${ev.metric}` : ''}
+                                        </a>
+                                        {ev.quote && <blockquote className="thesisEvidenceQuote">{ev.quote}</blockquote>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="holdingListEmpty">还没有持仓逻辑。</p>
+                  )}
+                  <button className="holdingAddItem" onClick={() => addHoldingItem(holding, 'thesisItems')}>
+                    <Plus size={14} />
+                    添加一条
+                  </button>
+                </section>
+
+                <section className="holdingListEditor riskListEditor" aria-labelledby={`risk-title-${holding.id}`}>
+                  <div className="holdingEditorHead">
+                    <span id={`risk-title-${holding.id}`}>风险点</span>
+                  </div>
+                  {riskItems.length > 0 ? (
+                    <ul className="holdingReminderList">
+                      {riskItems.map((item, index) => (
+                        <li className="holdingReminderRow" key={item.id}>
+                          <span className="reminderBullet" aria-hidden="true" />
+                          <input
+                            value={item.text}
+                            placeholder={`风险点 ${index + 1}`}
+                            onChange={(event) => updateHoldingItem(holding, 'riskItems', item.id, event.target.value)}
+                            aria-label={`风险点 ${index + 1}`}
+                          />
+                          <button
+                            className="reminderDelete"
+                            onClick={() => removeHoldingItem(holding, 'riskItems', item.id)}
+                            aria-label={`删除风险点 ${index + 1}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="holdingListEmpty">还没有风险点。</p>
+                  )}
+                  <button className="holdingAddItem" onClick={() => addHoldingItem(holding, 'riskItems')}>
+                    <Plus size={14} />
+                    添加一条
+                  </button>
+                </section>
+
+                {(conflicts.length > 0 || coverage) && (
+                  <div className="thesisConflictCallout">
+                    {conflicts.map((c, ci) => (
+                      <div key={ci} className="thesisConflictRow">
+                        <span className="thesisConflictIcon" aria-hidden="true">⚡</span>
+                        <span>{c.detail}</span>
+                      </div>
+                    ))}
+                    {coverage && (
+                      <div className="thesisCoverageRow">
+                        已检索 {coverage.filingsUsed} / {coverage.filingsExpected} 份 filing
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
           ) : holdingTab === 'entry' ? (
             <div className="holdingThesisWorkspace">
               <section className="entryPlan" aria-labelledby={`entry-plan-title-${holding.id}`}>

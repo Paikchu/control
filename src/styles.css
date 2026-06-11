@@ -1809,6 +1809,229 @@ textarea:focus {
   outline: 0;
 }
 
+/* ── Thesis AI check toolbar ─────────────────────────────────── */
+.thesisEditorHead {
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.thesisAiToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.thesisCheckBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(37,99,235,.35);
+  border-radius: 5px;
+  background: transparent;
+  color: #174aa6;
+  font-size: .74rem;
+  font-weight: 720;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.thesisCheckBtn:hover:not(:disabled) { background: rgba(37,99,235,.07); }
+.thesisCheckBtn:disabled { opacity: .5; cursor: default; }
+
+.thesisReCheckBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(100,116,139,.28);
+  border-radius: 5px;
+  background: transparent;
+  color: #64748b;
+  font-size: .85rem;
+  cursor: pointer;
+}
+.thesisReCheckBtn:hover { background: rgba(100,116,139,.08); color: #334155; }
+
+.thesisSumChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: .69rem;
+  font-weight: 700;
+}
+.thesisSumOk  { background: #d1fae5; color: #065f46; }
+.thesisSumWarn { background: #fef3c7; color: #92400e; }
+
+.thesisCheckedAt {
+  font-size: .69rem;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+
+.thesisCheckError {
+  margin: 0;
+  padding: 7px 10px;
+  background: #fff1f1;
+  border: 1px solid #fca5a5;
+  border-radius: 5px;
+  color: #b91c1c;
+  font-size: .75rem;
+}
+
+/* ── Per-row verdict badge ───────────────────────────────────── */
+.holdingReminderRow.thesisRowOk     { border-left: 2px solid #10b981; }
+.holdingReminderRow.thesisRowWarn   { border-left: 2px solid #f59e0b; }
+.holdingReminderRow.thesisRowDanger { border-left: 2px solid #ef4444; }
+
+/* badge with status — sits between input and delete */
+.holdingReminderRow {
+  grid-template-columns: 15px minmax(0, 1fr) auto 30px;
+}
+
+.thesisBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.thesisBadgeOk      { background: #d1fae5; color: #065f46; }
+.thesisBadgeWarn    { background: #fef3c7; color: #92400e; }
+.thesisBadgeDanger  { background: #fee2e2; color: #b91c1c; }
+.thesisBadgeNeutral { background: #f1f5f9; color: #64748b; }
+.thesisBadgePending { background: #eff6ff; color: #1d4ed8; }
+
+/* ── Expandable analysis drawer ─────────────────────────────── */
+.thesisCheckedList > li { display: grid; }
+
+.thesisDrawer {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 6px 15px;
+  padding: 11px 12px;
+  background: #f8fafc;
+  border: 1px solid rgba(203,213,225,.7);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+}
+
+.thesisDrawerBlock { display: grid; gap: 5px; }
+
+.thesisDrawerLabel {
+  font-size: .69rem;
+  font-weight: 760;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.thesisDrawerText {
+  margin: 0;
+  font-size: .79rem;
+  color: #334155;
+  line-height: 1.5;
+}
+
+.thesisDrawerChanges {
+  margin: 0;
+  font-size: .77rem;
+  color: #64748b;
+  line-height: 1.45;
+  font-style: italic;
+}
+
+.thesisPremiseRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: .78rem;
+  line-height: 1.4;
+}
+.thesisPremiseOk   .thesisPremiseIcon { color: #10b981; font-weight: 800; }
+.thesisPremiseFail .thesisPremiseIcon { color: #ef4444; font-weight: 800; }
+.thesisPremiseText { color: #334155; }
+.thesisPremiseText em { color: #64748b; font-style: normal; }
+
+.thesisRetrieval {
+  display: flex !important;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  background: #eff6ff;
+  border-radius: 5px;
+}
+.thesisRetrievalKeywords {
+  font-size: .73rem;
+  color: #1d4ed8;
+  font-family: monospace;
+}
+
+.thesisEvidenceRow { display: grid; gap: 3px; }
+.thesisEvidenceLink {
+  font-size: .75rem;
+  color: #2563eb;
+  text-decoration: none;
+  font-weight: 680;
+}
+.thesisEvidenceLink:hover { text-decoration: underline; }
+blockquote.thesisEvidenceQuote {
+  margin: 0;
+  padding: 4px 9px;
+  border-left: 2px solid #cbd5e1;
+  color: #64748b;
+  font-size: .74rem;
+  line-height: 1.45;
+  font-style: italic;
+}
+
+/* ── Cross-item conflict callout ─────────────────────────────── */
+.thesisConflictCallout {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 7px;
+  font-size: .77rem;
+}
+.thesisConflictRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: #78350f;
+  line-height: 1.45;
+}
+.thesisConflictIcon { flex-shrink: 0; font-size: .85rem; }
+.thesisCoverageRow {
+  font-size: .71rem;
+  color: #92400e;
+  opacity: .75;
+}
+
+/* ── Mobile adjustments ──────────────────────────────────────── */
+@media (max-width: 640px) {
+  .thesisEditorHead { gap: 4px 8px; }
+  .thesisAiToolbar  { gap: 4px; }
+  .thesisCheckBtn   { height: 28px; padding: 0 9px; font-size: .72rem; }
+  .thesisDrawer     { margin-left: 8px; padding: 9px 10px; }
+  .thesisBadge      { font-size: .66rem; padding: 0 6px; }
+}
+
 .entryPlan {
   display: grid;
   gap: 10px;
