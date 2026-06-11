@@ -2094,7 +2094,6 @@ function App() {
         <div className="portfolioUtility">
           <button className={`brokerConnectButton ${hasIbkrAccess ? 'connected' : ''}`} onClick={() => setIbkrPopoverOpen((open) => !open)} aria-expanded={ibkrPopoverOpen}>
             <Link2 size={14} />
-            账户连接
             {hasIbkrAccess && <span className="brokerConnectDot" />}
           </button>
           {ibkrPopoverOpen && (
@@ -2171,13 +2170,6 @@ function App() {
       </header>
       <div className="portfolioGrid">
         <aside className="holdingList" aria-label="持仓列表">
-          <div className="holdingListHead">
-            <div>
-              <h2>持仓</h2>
-              <span>{filteredPortfolio.length} / {displayedPortfolio.length}</span>
-            </div>
-            <button onClick={addHolding}><Plus size={16} />添加</button>
-          </div>
           <label className="holdingSearch">
             <Search size={16} aria-hidden="true" />
             <input
