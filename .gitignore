@@ -8,6 +8,10 @@ clientportal.gw/
 clientportal.beta.gw/
 .DS_Store
 *.log
+.claude/
+.codex-tmp/
+.tasks/
+outputs/
 .env
 .env.local
 .env.*.local
