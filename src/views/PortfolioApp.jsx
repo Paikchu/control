@@ -48,6 +48,41 @@ export function PortfolioApp() {
   });
   const [thesisCheckStatus, setThesisCheckStatus] = useState({});
   const [expandedThesisItem, setExpandedThesisItem] = useState({});
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    try {
+      const stored = Number(localStorage.getItem('holdingSidebarWidth'));
+      return Number.isFinite(stored) && stored >= 280 ? stored : 440;
+    } catch { return 440; }
+  });
+  const [resizing, setResizing] = useState(false);
+  const portfolioGridRef = useRef(null);
+
+  function startSidebarResize(event) {
+    event.preventDefault();
+    const grid = portfolioGridRef.current;
+    if (!grid) return;
+    const rect = grid.getBoundingClientRect();
+    const min = 300;
+    const max = Math.min(820, rect.width - 380); // always leave room for the research pane
+    let latest = sidebarWidth;
+    setResizing(true);
+    const onMove = (e) => {
+      latest = Math.max(min, Math.min(max, e.clientX - rect.left));
+      setSidebarWidth(latest);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setResizing(false);
+      try { localStorage.setItem('holdingSidebarWidth', String(Math.round(latest))); } catch {}
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
 
   const ibkrPortfolio = useMemo(() => mergeIbkrPortfolio(ibkrSnapshot, portfolio), [ibkrSnapshot, portfolio]);
   const displayedPortfolio = useMemo(() => (
@@ -624,7 +659,7 @@ export function PortfolioApp() {
           )}
         </div>
       </header>
-      <div className="portfolioGrid">
+      <div className="portfolioGrid" ref={portfolioGridRef} style={{ '--sidebar-w': `${sidebarWidth}px` }}>
         <aside className="holdingList" aria-label="持仓列表">
           <label className="holdingSearch">
             <Search size={16} aria-hidden="true" />
@@ -779,6 +814,16 @@ export function PortfolioApp() {
             </table>
           </div>
         </aside>
+
+        <div
+          className={`holdingResizer ${resizing ? 'dragging' : ''}`}
+          onPointerDown={startSidebarResize}
+          onDoubleClick={() => { setSidebarWidth(440); try { localStorage.setItem('holdingSidebarWidth', '440'); } catch {} }}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖动调整持仓列表宽度"
+          title="拖动调整宽度（双击重置）"
+        />
 
         <section className="researchPane" aria-label="研究面板">
           {showPortfolioOverview

@@ -2827,6 +2827,10 @@ blockquote.thesisEvidenceQuote {
     gap: 12px;
   }
 
+  .holdingResizer {
+    display: none;
+  }
+
   .holdingDetailDesktop {
     display: none;
   }
@@ -3351,10 +3355,23 @@ body {
 }
 
 .portfolioGrid {
-  grid-template-columns: minmax(310px, 360px) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-w, 360px) 6px minmax(0, 1fr);
   gap: 0;
   height: 100%;
   overflow: hidden;
+}
+
+/* Draggable divider between the holdings list and the research pane */
+.holdingResizer {
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  transition: background 140ms var(--ease-out-quart);
+}
+
+.holdingResizer:hover,
+.holdingResizer.dragging {
+  background: rgba(11, 87, 208, 0.14);
 }
 
 .holdingList {
@@ -3964,6 +3981,10 @@ body {
 
   .portfolioGrid {
     grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  }
+
+  .holdingResizer {
+    display: none;
   }
 }
 
