@@ -525,11 +525,7 @@ export function PortfolioApp() {
     <section className="portfolioDesk" aria-label="个人持仓">
       <header className="portfolioToolbar">
         <div className="portfolioIdentity">
-          <span className="portfolioMark" aria-hidden="true">P</span>
-          <div>
-            <h1>Portfolio</h1>
-            <span>{displayedPortfolio.length} 个持仓 · 总资产 {formatMoney(portfolioTotalValue)}</span>
-          </div>
+          <span className="controlWordmark">Con<b>trol</b></span>
         </div>
         <div className="marketStrip" aria-label="美股大盘行情">
           {(marketOverview?.indices?.length ? marketOverview.indices : []).map((index) => {
