@@ -21,8 +21,9 @@ function cleanSymbol(value) {
   return cleanText(value).toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 20);
 }
 
-export function initIbkrTables(db) {
-  db.exec(`
+// `db` is the adapter from server/db.mjs: { query(text, params), exec(text), tx(fn) }.
+export async function initIbkrTables(db) {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS ibkr_accounts (
       provider TEXT NOT NULL DEFAULT 'ibkr',
       account_id TEXT NOT NULL,
@@ -40,12 +41,12 @@ export function initIbkrTables(db) {
       name TEXT,
       sec_type TEXT,
       currency TEXT,
-      quantity REAL,
-      avg_cost REAL,
-      market_price REAL,
-      market_value REAL,
-      unrealized_pnl REAL,
-      realized_pnl REAL,
+      quantity DOUBLE PRECISION,
+      avg_cost DOUBLE PRECISION,
+      market_price DOUBLE PRECISION,
+      market_value DOUBLE PRECISION,
+      unrealized_pnl DOUBLE PRECISION,
+      realized_pnl DOUBLE PRECISION,
       fetched_at TEXT NOT NULL,
       closed_at TEXT,
       payload TEXT,
@@ -56,16 +57,16 @@ export function initIbkrTables(db) {
       provider TEXT NOT NULL DEFAULT 'ibkr',
       account_id TEXT NOT NULL,
       currency TEXT NOT NULL,
-      cash_balance REAL,
-      net_liquidation REAL,
-      market_value REAL,
+      cash_balance DOUBLE PRECISION,
+      net_liquidation DOUBLE PRECISION,
+      market_value DOUBLE PRECISION,
       fetched_at TEXT NOT NULL,
       payload TEXT,
       PRIMARY KEY (provider, account_id, currency)
     );
 
     CREATE TABLE IF NOT EXISTS ibkr_sync_runs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       provider TEXT NOT NULL DEFAULT 'ibkr',
       account_id TEXT NOT NULL,
       synced_at TEXT NOT NULL,
@@ -126,8 +127,7 @@ export function normalizeIbkrBalance(raw) {
   };
 }
 
-export function storeIbkrSync(db, { account, positions, balances = [], syncedAt = new Date().toISOString() }) {
-  initIbkrTables(db);
+export async function storeIbkrSync(db, { account, positions, balances = [], syncedAt = new Date().toISOString() }) {
   const normalizedAccount = normalizeIbkrAccount(account) || account;
   const accountId = cleanText(normalizedAccount.accountId);
   if (!accountId) throw new Error('IBKR accountId is required');
@@ -135,63 +135,38 @@ export function storeIbkrSync(db, { account, positions, balances = [], syncedAt 
   const normalizedPositions = positions.map((position) => normalizeIbkrPosition(position) || position).filter((position) => position?.conid && position?.symbol);
   const normalizedBalances = balances.map((balance) => normalizeIbkrBalance(balance) || balance).filter((balance) => balance?.currency);
 
-  const putAccount = db.prepare(`
-    INSERT INTO ibkr_accounts (provider, account_id, account_title, last_sync_at, payload)
-    VALUES ('ibkr', ?, ?, ?, ?)
-    ON CONFLICT(provider, account_id) DO UPDATE SET
-      account_title = excluded.account_title,
-      last_sync_at = excluded.last_sync_at,
-      payload = excluded.payload
-  `);
-  const putPosition = db.prepare(`
-    INSERT INTO ibkr_positions (
-      provider, account_id, conid, symbol, name, sec_type, currency, quantity, avg_cost,
-      market_price, market_value, unrealized_pnl, realized_pnl, fetched_at, closed_at, payload
-    )
-    VALUES ('ibkr', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
-    ON CONFLICT(provider, account_id, conid) DO UPDATE SET
-      symbol = excluded.symbol,
-      name = excluded.name,
-      sec_type = excluded.sec_type,
-      currency = excluded.currency,
-      quantity = excluded.quantity,
-      avg_cost = excluded.avg_cost,
-      market_price = excluded.market_price,
-      market_value = excluded.market_value,
-      unrealized_pnl = excluded.unrealized_pnl,
-      realized_pnl = excluded.realized_pnl,
-      fetched_at = excluded.fetched_at,
-      closed_at = NULL,
-      payload = excluded.payload
-  `);
-  const putBalance = db.prepare(`
-    INSERT INTO ibkr_balances (provider, account_id, currency, cash_balance, net_liquidation, market_value, fetched_at, payload)
-    VALUES ('ibkr', ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(provider, account_id, currency) DO UPDATE SET
-      cash_balance = excluded.cash_balance,
-      net_liquidation = excluded.net_liquidation,
-      market_value = excluded.market_value,
-      fetched_at = excluded.fetched_at,
-      payload = excluded.payload
-  `);
-  const putRun = db.prepare(`
-    INSERT INTO ibkr_sync_runs (provider, account_id, synced_at, position_count, balance_count)
-    VALUES ('ibkr', ?, ?, ?, ?)
-  `);
-  const closeMissing = db.prepare(`
-    UPDATE ibkr_positions
-    SET closed_at = ?
-    WHERE provider = 'ibkr'
-      AND account_id = ?
-      AND closed_at IS NULL
-      AND conid NOT IN (${normalizedPositions.map(() => '?').join(',') || "''"})
-  `);
+  await db.tx(async (query) => {
+    await query(`
+      INSERT INTO ibkr_accounts (provider, account_id, account_title, last_sync_at, payload)
+      VALUES ('ibkr', $1, $2, $3, $4)
+      ON CONFLICT (provider, account_id) DO UPDATE SET
+        account_title = EXCLUDED.account_title,
+        last_sync_at = EXCLUDED.last_sync_at,
+        payload = EXCLUDED.payload
+    `, [accountId, normalizedAccount.accountTitle || accountId, syncedAt, JSON.stringify(normalizedAccount.raw || account)]);
 
-  db.exec('BEGIN');
-  try {
-    putAccount.run(accountId, normalizedAccount.accountTitle || accountId, syncedAt, JSON.stringify(normalizedAccount.raw || account));
-    normalizedPositions.forEach((position) => {
-      putPosition.run(
+    for (const position of normalizedPositions) {
+      await query(`
+        INSERT INTO ibkr_positions (
+          provider, account_id, conid, symbol, name, sec_type, currency, quantity, avg_cost,
+          market_price, market_value, unrealized_pnl, realized_pnl, fetched_at, closed_at, payload
+        )
+        VALUES ('ibkr', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL, $14)
+        ON CONFLICT (provider, account_id, conid) DO UPDATE SET
+          symbol = EXCLUDED.symbol,
+          name = EXCLUDED.name,
+          sec_type = EXCLUDED.sec_type,
+          currency = EXCLUDED.currency,
+          quantity = EXCLUDED.quantity,
+          avg_cost = EXCLUDED.avg_cost,
+          market_price = EXCLUDED.market_price,
+          market_value = EXCLUDED.market_value,
+          unrealized_pnl = EXCLUDED.unrealized_pnl,
+          realized_pnl = EXCLUDED.realized_pnl,
+          fetched_at = EXCLUDED.fetched_at,
+          closed_at = NULL,
+          payload = EXCLUDED.payload
+      `, [
         accountId,
         String(position.conid),
         position.symbol,
@@ -206,10 +181,20 @@ export function storeIbkrSync(db, { account, positions, balances = [], syncedAt 
         position.realizedPnl,
         syncedAt,
         JSON.stringify(position)
-      );
-    });
-    normalizedBalances.forEach((balance) => {
-      putBalance.run(
+      ]);
+    }
+
+    for (const balance of normalizedBalances) {
+      await query(`
+        INSERT INTO ibkr_balances (provider, account_id, currency, cash_balance, net_liquidation, market_value, fetched_at, payload)
+        VALUES ('ibkr', $1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (provider, account_id, currency) DO UPDATE SET
+          cash_balance = EXCLUDED.cash_balance,
+          net_liquidation = EXCLUDED.net_liquidation,
+          market_value = EXCLUDED.market_value,
+          fetched_at = EXCLUDED.fetched_at,
+          payload = EXCLUDED.payload
+      `, [
         accountId,
         balance.currency,
         balance.cashBalance,
@@ -217,35 +202,45 @@ export function storeIbkrSync(db, { account, positions, balances = [], syncedAt 
         balance.marketValue,
         syncedAt,
         JSON.stringify(balance.raw || balance)
-      );
-    });
-    closeMissing.run(syncedAt, accountId, ...normalizedPositions.map((position) => String(position.conid)));
-    putRun.run(accountId, syncedAt, normalizedPositions.length, normalizedBalances.length);
-    db.exec('COMMIT');
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
+      ]);
+    }
+
+    const keptConids = normalizedPositions.map((position) => String(position.conid));
+    await query(`
+      UPDATE ibkr_positions
+      SET closed_at = $1
+      WHERE provider = 'ibkr'
+        AND account_id = $2
+        AND closed_at IS NULL
+        AND NOT (conid = ANY($3))
+    `, [syncedAt, accountId, keptConids]);
+
+    await query(`
+      INSERT INTO ibkr_sync_runs (provider, account_id, synced_at, position_count, balance_count)
+      VALUES ('ibkr', $1, $2, $3, $4)
+    `, [accountId, syncedAt, normalizedPositions.length, normalizedBalances.length]);
+  });
+
   return { account: normalizedAccount, positions: normalizedPositions, balances: normalizedBalances, syncedAt };
 }
 
-export function readIbkrSnapshot(db, accountId = null) {
-  initIbkrTables(db);
-  const account = accountId
-    ? db.prepare('SELECT * FROM ibkr_accounts WHERE provider = ? AND account_id = ?').get('ibkr', accountId)
-    : db.prepare('SELECT * FROM ibkr_accounts WHERE provider = ? ORDER BY last_sync_at DESC LIMIT 1').get('ibkr');
+export async function readIbkrSnapshot(db, accountId = null) {
+  const accountResult = accountId
+    ? await db.query('SELECT * FROM ibkr_accounts WHERE provider = $1 AND account_id = $2', ['ibkr', accountId])
+    : await db.query('SELECT * FROM ibkr_accounts WHERE provider = $1 ORDER BY last_sync_at DESC LIMIT 1', ['ibkr']);
+  const account = accountResult.rows[0];
   if (!account) return { account: null, positions: [], balances: [], lastSyncAt: null };
 
-  const positions = db.prepare(`
+  const { rows: positions } = await db.query(`
     SELECT * FROM ibkr_positions
-    WHERE provider = 'ibkr' AND account_id = ? AND closed_at IS NULL
+    WHERE provider = 'ibkr' AND account_id = $1 AND closed_at IS NULL
     ORDER BY market_value DESC, symbol
-  `).all(account.account_id);
-  const balances = db.prepare(`
+  `, [account.account_id]);
+  const { rows: balances } = await db.query(`
     SELECT * FROM ibkr_balances
-    WHERE provider = 'ibkr' AND account_id = ?
+    WHERE provider = 'ibkr' AND account_id = $1
     ORDER BY currency
-  `).all(account.account_id);
+  `, [account.account_id]);
 
   return {
     account: {

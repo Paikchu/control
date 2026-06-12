@@ -1,0 +1,15 @@
+node_modules
+dist
+data
+outputs
+output
+.git
+.claude
+.codex-tmp
+.tasks
+.playwright-cli
+.playwright-mcp
+clientportal.gw
+clientportal.beta.gw
+*.png
+.env.local

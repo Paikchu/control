@@ -1,11 +1,32 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
+import { PGlite } from '@electric-sql/pglite';
 import {
   initIbkrTables,
   normalizeIbkrPosition,
   storeIbkrSync
 } from '../src/ibkrSync.mjs';
+
+// In-memory Postgres with the same adapter shape as server/db.mjs.
+async function memoryDb() {
+  const lite = new PGlite();
+  const query = (text, params = []) => lite.query(text, params);
+  return {
+    query,
+    exec: (text) => lite.exec(text),
+    tx: async (fn) => {
+      await query('BEGIN');
+      try {
+        const result = await fn(query);
+        await query('COMMIT');
+        return result;
+      } catch (error) {
+        await query('ROLLBACK');
+        throw error;
+      }
+    }
+  };
+}
 
 test('normalizes only equity and ETF positions into the local holding shape', () => {
   const stock = normalizeIbkrPosition({
@@ -67,11 +88,11 @@ test('normalizes portfolio2 position rows', () => {
   });
 });
 
-test('stores IBKR sync snapshots and marks missing old positions closed', () => {
-  const db = new DatabaseSync(':memory:');
-  initIbkrTables(db);
+test('stores IBKR sync snapshots and marks missing old positions closed', async () => {
+  const db = await memoryDb();
+  await initIbkrTables(db);
 
-  storeIbkrSync(db, {
+  await storeIbkrSync(db, {
     account: { accountId: 'DU123', accountTitle: 'Paper Account' },
     positions: [
       { conid: '265598', symbol: 'AAPL', name: 'Apple Inc', secType: 'STK', currency: 'USD', quantity: 10, avgCost: 180, marketPrice: 205, marketValue: 2050, unrealizedPnl: 250, realizedPnl: 0 },
@@ -81,7 +102,7 @@ test('stores IBKR sync snapshots and marks missing old positions closed', () => 
     syncedAt: '2026-06-09T01:00:00.000Z'
   });
 
-  storeIbkrSync(db, {
+  await storeIbkrSync(db, {
     account: { accountId: 'DU123', accountTitle: 'Paper Account' },
     positions: [
       { conid: '265598', symbol: 'AAPL', name: 'Apple Inc', secType: 'STK', currency: 'USD', quantity: 12, avgCost: 181, marketPrice: 206, marketValue: 2472, unrealizedPnl: 300, realizedPnl: 0 }
@@ -90,9 +111,9 @@ test('stores IBKR sync snapshots and marks missing old positions closed', () => 
     syncedAt: '2026-06-09T02:00:00.000Z'
   });
 
-  const active = db.prepare('SELECT symbol, quantity, market_value, closed_at FROM ibkr_positions WHERE account_id = ? AND closed_at IS NULL ORDER BY symbol').all('DU123').map((row) => ({ ...row }));
-  const closed = db.prepare('SELECT symbol, closed_at FROM ibkr_positions WHERE account_id = ? AND closed_at IS NOT NULL').all('DU123').map((row) => ({ ...row }));
-  const runs = db.prepare('SELECT COUNT(*) AS count FROM ibkr_sync_runs').get();
+  const active = (await db.query('SELECT symbol, quantity, market_value, closed_at FROM ibkr_positions WHERE account_id = $1 AND closed_at IS NULL ORDER BY symbol', ['DU123'])).rows;
+  const closed = (await db.query('SELECT symbol, closed_at FROM ibkr_positions WHERE account_id = $1 AND closed_at IS NOT NULL', ['DU123'])).rows;
+  const runs = (await db.query('SELECT COUNT(*)::int AS count FROM ibkr_sync_runs')).rows[0];
 
   assert.deepEqual(active, [{ symbol: 'AAPL', quantity: 12, market_value: 2472, closed_at: null }]);
   assert.deepEqual(closed, [{ symbol: 'QQQ', closed_at: '2026-06-09T02:00:00.000Z' }]);

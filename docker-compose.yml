@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: portfolio
+      POSTGRES_PASSWORD: portfolio
+      POSTGRES_DB: portfolio
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portfolio -d portfolio"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+    # 本机调试需要直连数据库时再放开：
+    # ports:
+    #   - "5442:5432"
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    # DEEPSEEK_API_KEY 等密钥放在 .env.local（Compose 默认只读 .env，
+    # 所以这里显式注入，否则容器内 key 为空、SEC 文件总结无法生成）。
+    env_file:
+      - .env.local
+    environment:
+      DATABASE_URL: postgres://portfolio:portfolio@db:5432/portfolio
+      # IBKR Gateway 跑在宿主机上，容器内通过 host.docker.internal 访问
+      IBKR_BASE_URL: ${IBKR_BASE_URL:-https://host.docker.internal:5001/v1/api}
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-PortfolioBacktest/0.1 max@local.invalid}
+      DEEPSEEK_SEC_MODEL: ${DEEPSEEK_SEC_MODEL:-deepseek-chat}
+      DEEPSEEK_STRATEGY_MODEL: ${DEEPSEEK_STRATEGY_MODEL:-deepseek-chat}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${APP_PORT:-8787}:8787"
+
+volumes:
+  pgdata:

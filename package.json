@@ -4,17 +4,24 @@
     "dev": "vite --host 127.0.0.1",
     "api": "node --env-file-if-exists=.env.local server.mjs",
     "build": "vite build",
+    "test": "node --test test/*.test.mjs",
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
+    "@hono/node-server": "^2.0.4",
     "@vitejs/plugin-react": "^5.1.1",
     "echarts": "^6.0.0",
     "echarts-for-react": "^3.0.3",
+    "hono": "^4.12.25",
     "lucide-react": "^0.555.0",
     "pdfkit": "^0.18.0",
+    "pg": "^8.21.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "typescript": "^5.9.3",
     "vite": "^7.2.4"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.2"
   }
 }
