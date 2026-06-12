@@ -75,7 +75,7 @@ const marketIndices = [
   { symbol: '^VIX', name: 'VIX' }
 ];
 
-async function fetchIndexQuote({ symbol, name }) {
+async function fetchIntradayRaw(symbol) {
   const params = new URLSearchParams({ range: '1d', interval: '5m', includePrePost: 'false' });
   const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${params}`, {
     headers: {
@@ -83,11 +83,12 @@ async function fetchIndexQuote({ symbol, name }) {
       'user-agent': 'Mozilla/5.0 PortfolioBacktest/0.1'
     }
   });
-  if (!response.ok) {
-    throw new Error(`Yahoo Finance HTTP ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`Yahoo Finance HTTP ${response.status}`);
+  return (await response.json())?.chart?.result?.[0];
+}
 
-  const result = (await response.json())?.chart?.result?.[0];
+async function fetchIndexQuote({ symbol, name }) {
+  const result = await fetchIntradayRaw(symbol);
   const meta = result?.meta || {};
   const closes = (result?.indicators?.quote?.[0]?.close || []).filter((value) => Number.isFinite(value));
   const price = Number.isFinite(meta.regularMarketPrice) ? meta.regularMarketPrice : closes[closes.length - 1];

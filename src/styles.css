@@ -1,5 +1,12 @@
 @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@700;800&family=Instrument+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700;800&family=Sora:wght@700;800&display=swap');
 
+/* Tailwind v4 — theme tokens + utilities only.
+   Preflight (the global reset) is intentionally NOT imported so Tailwind can
+   coexist with the existing hand-written design system without clobbering it.
+   Migrate components to utilities incrementally. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
 :root {
   --font-display: "Bricolage Grotesque", "Noto Sans SC", sans-serif;
   --font-body: "Instrument Sans", "Noto Sans SC", sans-serif;
@@ -3430,106 +3437,139 @@ body {
   border-radius: 0;
 }
 
-.holdingTable {
-  display: block;
-  border: 0;
-  border-radius: 0;
+/* ── Native table layout ─────────────────────────────────────────── */
+/* Header and body are separate tables so the scrollbar only spans the body,
+   not the header. Both containers reserve an identical scrollbar gutter via
+   `scrollbar-gutter: stable`, so their columns line up automatically without
+   hard-coding the platform's scrollbar width. */
+.holdingTableHeadScroll,
+.holdingTableScroll {
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   background: #fff;
+  scrollbar-width: thin;
   scrollbar-color: #c9cdd3 transparent;
 }
 
-.holdingTableHeader,
-.holdingRow {
-  width: 100%;
-}
-
-.holdingTableHeader {
-  position: sticky;
-  z-index: 4;
-  top: 0;
-  display: grid;
-  grid-template-columns: minmax(92px, 1fr) 82px 84px 30px;
-  min-height: 36px;
-  align-items: center;
-  gap: 6px;
+.holdingTableHeadScroll {
+  overflow-y: hidden;        /* never scrolls — only reserves the gutter */
   border-bottom: 1px solid #e6e9ed;
   background: rgba(255, 255, 255, .96);
+}
+
+.holdingTableScroll {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.holdingTableScroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(100, 116, 139, .34);
+}
+
+.holdingTable {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+/* Reset display overrides from BacktestView global rules */
+.holdingTable,
+.holdingTable thead,
+.holdingTable tbody,
+.holdingTable .holdingTableHeader,
+.holdingTable .holdingRow {
+  display: revert;
+}
+
+/* Column widths: stock auto, three value cols 20% each, action fixed */
+.holdingTable col.colValue  { width: 20%; }
+.holdingTable col.colAction { width: 30px; }
+
+/* Header row */
+.holdingTableHeader th {
+  height: 36px;
   color: #5f6368;
-  padding: 0 12px 0 20px;
   font-size: .72rem;
   font-weight: 720;
   letter-spacing: .02em;
-  backdrop-filter: blur(10px);
-}
-
-.holdingTableHeader span {
   text-align: right;
+  white-space: nowrap;
+  padding: 0 10px;
 }
 
-.holdingTableHeader span:first-child {
+.holdingTableHeader th:first-child {
   text-align: left;
+  padding-left: 24px;
 }
 
-.holdingRow {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(92px, 1fr) 82px 84px 30px;
-  min-height: 48px;
-  align-items: center;
-  gap: 6px;
+.holdingTableHeader th:last-child {
+  padding: 0;
+}
+
+/* Data rows */
+.holdingTable .holdingRow {
   border-bottom: 1px solid #eceff2;
   background: #fff;
-  padding: 6px 12px 6px 20px;
-  transition: background 180ms var(--ease-out-quart), transform 220ms var(--ease-out-quint);
+  transition: background 180ms var(--ease-out-quart);
   animation: holdingRowEnter 420ms var(--ease-out-quint) both;
   animation-delay: calc(var(--row-index, 0) * 35ms);
 }
 
-.holdingRow::before {
-  content: "";
-  position: absolute;
-  top: 10px;
-  bottom: 10px;
-  left: 0;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: #0b57d0;
-  opacity: 0;
-  transform: scaleY(.45);
-  transition: opacity 180ms var(--ease-out-quart), transform 260ms var(--ease-out-quint);
+.holdingTable .holdingRow:hover { background: #f5f8fd; }
+.holdingTable .holdingRow.open  { background: #eef4ff; }
+
+/* Cell padding and alignment */
+.holdingTable td {
+  padding: 0;
+  vertical-align: middle;
 }
 
-.holdingRow:hover {
-  background: #f5f8fd;
+.holdingTable td.cellStock {
+  padding-left: 24px;
 }
 
-.holdingRow.open {
-  background: #eef4ff;
-  box-shadow: none;
-  transform: translateX(3px);
+.holdingTable .holdingRow.open td.cellStock {
+  box-shadow: inset 3px 0 0 #0b57d0;
 }
 
-.holdingRow.open::before {
-  opacity: 1;
-  transform: scaleY(1);
+.holdingTable td.cellValue {
+  padding: 0 10px;
+  text-align: right;
 }
 
+.holdingTable td.cellAction {
+  text-align: right;
+  padding-right: 10px;
+}
+
+/* Buttons fill their cells */
 .holdingSelect,
 .holdingValue,
 .holdingMovement {
-  min-width: 0;
-  min-height: 36px;
+  display: grid;
+  width: 100%;
+  min-height: 48px;
   border: 0;
   background: transparent;
-  padding: 0;
+  padding: 6px 0;
+  cursor: pointer;
 }
 
 .holdingSelect {
-  display: grid;
   align-content: center;
   justify-items: start;
-  gap: 4px;
+  gap: 3px;
   text-align: left;
+}
+
+.holdingValue,
+.holdingMovement {
+  align-content: center;
+  justify-items: end;
+  gap: 2px;
+  text-align: right;
 }
 
 .holdingTicker {
@@ -3565,15 +3605,6 @@ body {
   line-height: 1.2;
 }
 
-.holdingValue,
-.holdingMovement {
-  display: grid;
-  align-content: center;
-  justify-items: end;
-  gap: 3px;
-  text-align: right;
-}
-
 .holdingValue strong,
 .holdingMovement strong {
   overflow: hidden;
@@ -3599,11 +3630,26 @@ body {
   font-weight: 730;
 }
 
+/* Day-change percentage — inherits text-align: right from .cellValue */
+.holdingDayChange {
+  font-size: .76rem;
+  font-weight: 740;
+  line-height: 1.2;
+}
+
 .holdingDelete,
 .holdingLock {
-  align-self: center;
-  justify-self: end;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 48px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
 }
+
+/* ─────────────────────────────────────────────────────────────────── */
 
 .holdingQuickEdit {
   display: none;
