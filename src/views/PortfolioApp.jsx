@@ -10,6 +10,7 @@ import { ibkrStatusMessage, mergeIbkrPortfolio, readStoredIbkrAccountId, readSto
 import { AddHoldingModal } from '../components/AddHoldingModal.jsx';
 import { HoldingDetail } from '../components/HoldingDetail.jsx';
 import { HoldingOptionLegs } from '../components/HoldingOptionLegs.jsx';
+import { MarketGammaPill } from '../components/MarketGammaPill.jsx';
 import { SectorHeatmap } from '../components/SectorHeatmap.jsx';
 
 // 持仓工作台：当前应用的唯一视图。
@@ -584,6 +585,7 @@ export function PortfolioApp() {
           {!marketOverview?.indices?.length && <span className="marketStripEmpty">大盘行情加载中…</span>}
         </div>
         <div className="portfolioUtility">
+          <MarketGammaPill />
           <button className={`brokerConnectButton ${hasIbkrAccess ? 'connected' : ''}`} onClick={() => setIbkrPopoverOpen((open) => !open)} aria-expanded={ibkrPopoverOpen}>
             <Link2 size={14} />
             {hasIbkrAccess && <span className="brokerConnectDot" />}

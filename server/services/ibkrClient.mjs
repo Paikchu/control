@@ -26,7 +26,7 @@ function ibkrErrorMessage(statusCode, payload) {
   return `IBKR HTTP ${statusCode}`;
 }
 
-function ibkrRequest(pathname, { method = 'GET', body = null } = {}) {
+export function ibkrRequest(pathname, { method = 'GET', body = null } = {}) {
   const base = ensureLocalIbkrBase();
   const basePath = base.pathname.replace(/\/$/, '');
   const cleanPath = pathname.startsWith('/') ? pathname : `/${pathname}`;

@@ -4389,3 +4389,74 @@ body {
     animation-duration: .001ms !important;
   }
 }
+
+/* ── 大盘期权研判 pill（header） ───────────────────────────── */
+.gammaPill { position: relative; display: inline-flex; }
+
+.gammaPillButton {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 30px; padding: 0 10px;
+  border: 1px solid rgba(203, 213, 225, .8);
+  border-radius: 999px; background: #fff; cursor: pointer;
+  font-size: .8rem; color: var(--muted);
+  transition: border-color 140ms, box-shadow 140ms;
+}
+.gammaPillButton:hover { border-color: rgba(148, 163, 184, .95); }
+.gammaPillButton .gammaPillLabel { font-weight: 650; }
+.gammaPillButton strong { font-weight: 800; }
+.gammaPillButton.bull { color: var(--green); border-color: rgba(15, 122, 77, .4); }
+.gammaPillButton.bear { color: var(--red); border-color: rgba(163, 49, 45, .4); }
+.gammaPillButton.flat { color: var(--muted); }
+
+.gammaPopover {
+  position: absolute; top: calc(100% + 8px); right: 0;
+  width: min(360px, calc(100vw - 44px));
+  background: rgba(248, 250, 252, .98);
+  border: 1px solid rgba(203, 213, 225, .82);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 32px rgba(16, 22, 34, .16);
+  backdrop-filter: blur(14px);
+  padding: 10px; display: grid; gap: 8px; z-index: 100;
+  animation: popoverEnter 180ms var(--ease-out-quint, ease-out) both;
+}
+.gammaPopoverHead {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: .78rem; font-weight: 750; letter-spacing: .03em;
+  text-transform: uppercase; color: var(--muted);
+  padding: 2px 2px 6px; border-bottom: 1px solid rgba(203, 213, 225, .6);
+}
+.gammaRefresh {
+  display: inline-flex; border: none; background: transparent;
+  cursor: pointer; color: var(--muted); padding: 2px;
+}
+.gammaRefresh:hover { color: var(--blue); }
+.gammaRefresh .spin { animation: spin 900ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.gammaForecast { display: grid; gap: 6px; }
+.gammaForecastTop { display: flex; align-items: center; gap: 6px; }
+.gammaBadge {
+  font-size: .72rem; font-weight: 800; padding: 1px 8px; border-radius: 999px;
+}
+.gammaBadge.sm { font-size: .66rem; padding: 0 6px; }
+.gammaBadge.bull { background: rgba(15, 122, 77, .12); color: var(--green); }
+.gammaBadge.bear { background: rgba(163, 49, 45, .12); color: var(--red); }
+.gammaBadge.flat { background: rgba(100, 116, 139, .14); color: var(--muted); }
+.gammaConf, .gammaHorizon { font-size: .72rem; color: var(--muted); }
+.gammaSummary { margin: 0; font-size: .82rem; line-height: 1.5; color: #1e293b; }
+.gammaList { margin: 0; padding-left: 16px; display: grid; gap: 2px; font-size: .76rem; color: var(--muted); }
+.gammaList.risk { color: var(--red); }
+
+.gammaMetrics { display: grid; gap: 6px; }
+.gammaEmpty { font-size: .78rem; color: var(--muted); padding: 4px 2px; }
+.gammaCard { border: 1px solid rgba(203, 213, 225, .7); border-radius: 9px; background: #fff; padding: 7px 9px; }
+.gammaCardHead { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; }
+.gammaCardHead strong { font-size: .9rem; }
+.gammaSpot { font-size: .78rem; color: var(--muted); margin-right: auto; }
+.gammaGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 8px; }
+.gammaGrid > div { display: flex; flex-direction: column; }
+.gammaGrid span { font-size: .66rem; color: var(--muted); }
+.gammaGrid b { font-size: .82rem; font-variant-numeric: tabular-nums; }
+
+.gammaError { font-size: .74rem; color: var(--red); line-height: 1.4; }
+.gammaFoot { font-size: .7rem; color: var(--muted); padding-top: 2px; }

@@ -5,6 +5,7 @@ import { ibkrRoutes } from './routes/ibkr.mjs';
 import { strategyRoutes } from './routes/strategy.mjs';
 import { secRoutes } from './routes/sec.mjs';
 import { holdingsRoutes } from './routes/holdings.mjs';
+import { optionsRoutes } from './routes/options.mjs';
 
 export function createApp(db) {
   const app = new Hono();
@@ -18,6 +19,7 @@ export function createApp(db) {
   app.route('/', strategyRoutes());
   app.route('/', secRoutes(db));
   app.route('/', holdingsRoutes(db));
+  app.route('/', optionsRoutes(db));
 
   app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

@@ -204,6 +204,32 @@ export const schemaSql = `
     balance_count INTEGER NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS option_snapshots (
+    symbol TEXT NOT NULL,
+    snapshot_date TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    spot DOUBLE PRECISION,
+    pcr_volume DOUBLE PRECISION,
+    pcr_oi DOUBLE PRECISION,
+    net_gamma DOUBLE PRECISION,
+    gamma_flip DOUBLE PRECISION,
+    call_wall DOUBLE PRECISION,
+    put_wall DOUBLE PRECISION,
+    bias TEXT,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (symbol, snapshot_date)
+  );
+
+  CREATE TABLE IF NOT EXISTS option_forecasts (
+    snapshot_date TEXT NOT NULL,
+    model TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    bias TEXT,
+    confidence DOUBLE PRECISION,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (snapshot_date, model)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_extracts_ticker ON sec_filing_extracts(ticker, kind);
   CREATE INDEX IF NOT EXISTS idx_extract_status_ticker ON sec_filing_extract_status(ticker);
   CREATE INDEX IF NOT EXISTS idx_chunks_ticker ON sec_filing_chunks(ticker, accession_number);
