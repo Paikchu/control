@@ -9,6 +9,11 @@ import {
 
 const ibkrBaseUrl = process.env.IBKR_BASE_URL || 'https://127.0.0.1:5001/v1/api';
 
+// IBKR Gateway 的 portfolio/positions 等接口首次调用常需数秒，且进程刚启动时到
+// 本地 Java Gateway 的首个 TLS 握手也可能 >1s。早期写死的 1800ms 太短，会让
+// 「登录成功后却拉不到持仓」「刚连上就报 Gateway offline」。给一个宽松且可配的默认值。
+const ibkrTimeoutMs = Number(process.env.IBKR_TIMEOUT_MS) || 15000;
+
 function ensureLocalIbkrBase() {
   const base = new URL(ibkrBaseUrl);
   // host.docker.internal lets the Docker container reach a gateway on the host.
@@ -26,7 +31,7 @@ function ibkrErrorMessage(statusCode, payload) {
   return `IBKR HTTP ${statusCode}`;
 }
 
-export function ibkrRequest(pathname, { method = 'GET', body = null } = {}) {
+export function ibkrRequest(pathname, { method = 'GET', body = null, timeoutMs = ibkrTimeoutMs } = {}) {
   const base = ensureLocalIbkrBase();
   const basePath = base.pathname.replace(/\/$/, '');
   const cleanPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
@@ -46,7 +51,7 @@ export function ibkrRequest(pathname, { method = 'GET', body = null } = {}) {
         'user-agent': 'PortfolioBacktest/0.1',
         ...(payload ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) } : {})
       },
-      timeout: 1800
+      timeout: timeoutMs
     }, (response) => {
       let data = '';
       response.setEncoding('utf8');
@@ -97,12 +102,14 @@ export async function getIbkrStatus() {
   loginUrl.pathname = '';
   loginUrl.search = '';
   try {
-    const payload = await ibkrRequest('/iserver/auth/status', { method: 'POST', body: {} });
+    // 状态轮询要保持灵敏，给一个比数据接口更短的超时（仍足以覆盖冷启动握手与 init）。
+    const payload = await ibkrRequest('/iserver/auth/status', { method: 'POST', body: {}, timeoutMs: 6000 });
     if (payload?.connected && !payload?.authenticated) {
       try {
         const initPayload = await ibkrRequest('/iserver/auth/ssodh/init', {
           method: 'POST',
-          body: { publish: true, compete: true }
+          body: { publish: true, compete: true },
+          timeoutMs: 6000
         });
         return {
           gateway: 'running',
