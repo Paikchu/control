@@ -65,6 +65,9 @@ export function ibkrHoldingFromPosition(position, notes) {
     currency: position.currency || 'USD',
     secType: position.secType || 'STK',
     fetchedAt: position.fetchedAt,
+    options: [],
+    optionsMarketValue: 0,
+    optionsUnrealizedPnl: 0,
     thesis: local?.thesis || '',
     risk: local?.risk || '',
     thesisItems: normalizeHoldingItems(local?.thesisItems, local?.thesis, 'thesis'),
@@ -73,9 +76,83 @@ export function ibkrHoldingFromPosition(position, notes) {
   };
 }
 
+// Shape an option position into a compact leg the holdings table can render.
+export function ibkrOptionLeg(position) {
+  const quantity = Number(position.quantity) || 0;
+  return {
+    id: `ibkr-opt-${position.conid || position.optionLabel}`,
+    conid: position.conid,
+    label: position.optionLabel || `${normalizeTicker(position.symbol)} ${position.right || ''}`.trim(),
+    right: position.right || '',
+    strike: position.strike ?? null,
+    expiry: position.expiry || '',
+    quantity,
+    side: quantity < 0 ? 'short' : 'long',
+    multiplier: position.multiplier || 100,
+    marketPrice: position.marketPrice,
+    marketValue: position.marketValue,
+    avgCost: position.avgCost,
+    unrealizedPnl: position.unrealizedPnl
+  };
+}
+
+// A ticker with options but no share position still needs a host row.
+function ibkrOptionOnlyHolding(position, notes) {
+  const host = ibkrHoldingFromPosition(position, notes);
+  return {
+    ...host,
+    id: `ibkr-${normalizeTicker(position.symbol)}`,
+    conid: '',
+    shares: 0,
+    cost: 0,
+    marketPrice: null,
+    marketValue: 0,
+    unrealizedPnl: null,
+    realizedPnl: null,
+    secType: 'STK',
+    optionsOnly: true
+  };
+}
+
+// Fold option legs into the matching underlying share row, keyed by ticker.
+// Tickers held only as options get a synthesized shell row so they still show.
 export function mergeIbkrPortfolio(snapshot, localPortfolio) {
   const positions = Array.isArray(snapshot?.positions) ? snapshot.positions : [];
-  return positions.map((position) => ibkrHoldingFromPosition(position, localPortfolio)).filter((holding) => holding.symbol);
+  const holdings = [];
+  const bySymbol = new Map();
+
+  for (const position of positions) {
+    if (position.secType === 'OPT') continue;
+    const holding = ibkrHoldingFromPosition(position, localPortfolio);
+    if (!holding.symbol) continue;
+    holdings.push(holding);
+    if (!bySymbol.has(holding.symbol)) bySymbol.set(holding.symbol, holding);
+  }
+
+  for (const position of positions) {
+    if (position.secType !== 'OPT') continue;
+    const symbol = normalizeTicker(position.symbol);
+    if (!symbol) continue;
+    let host = bySymbol.get(symbol);
+    if (!host) {
+      host = ibkrOptionOnlyHolding(position, localPortfolio);
+      bySymbol.set(symbol, host);
+      holdings.push(host);
+    }
+    const leg = ibkrOptionLeg(position);
+    host.options.push(leg);
+    host.optionsMarketValue += Number(leg.marketValue) || 0;
+    host.optionsUnrealizedPnl += Number(leg.unrealizedPnl) || 0;
+  }
+
+  for (const holding of holdings) {
+    holding.options.sort((a, b) => {
+      if (a.expiry !== b.expiry) return a.expiry < b.expiry ? -1 : 1;
+      return (a.strike ?? 0) - (b.strike ?? 0);
+    });
+  }
+
+  return holdings;
 }
 
 export function ibkrStatusMessage(message) {

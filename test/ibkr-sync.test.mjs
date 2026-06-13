@@ -28,7 +28,7 @@ async function memoryDb() {
   };
 }
 
-test('normalizes only equity and ETF positions into the local holding shape', () => {
+test('normalizes equity and ETF positions into the local holding shape', () => {
   const stock = normalizeIbkrPosition({
     conid: 265598,
     contractDesc: 'AAPL',
@@ -42,9 +42,7 @@ test('normalizes only equity and ETF positions into the local holding shape', ()
     unrealizedPnl: 252.5,
     realizedPnl: 12
   });
-  const option = normalizeIbkrPosition({ conid: 1, contractDesc: 'AAPL 2026C200', assetClass: 'OPT', position: 1 });
 
-  assert.equal(option, null);
   assert.deepEqual(stock, {
     conid: '265598',
     symbol: 'AAPL',
@@ -58,6 +56,55 @@ test('normalizes only equity and ETF positions into the local holding shape', ()
     unrealizedPnl: 252.5,
     realizedPnl: 12
   });
+});
+
+test('normalizes option positions onto the underlying ticker', () => {
+  const option = normalizeIbkrPosition({
+    conid: '728283',
+    undSym: 'AAPL',
+    undComp: 'Apple Inc',
+    assetClass: 'OPT',
+    putOrCall: 'C',
+    strike: 200,
+    expiry: '20260116',
+    multiplier: '100',
+    currency: 'USD',
+    position: 2,
+    mktPrice: 12.5,
+    mktValue: 2500,
+    avgCost: 9.1,
+    unrealizedPnl: 680,
+    contractDesc: "AAPL JAN 16 '26 200 CALL"
+  });
+
+  assert.equal(option.secType, 'OPT');
+  assert.equal(option.symbol, 'AAPL');
+  assert.equal(option.underlying, 'AAPL');
+  assert.equal(option.right, 'C');
+  assert.equal(option.strike, 200);
+  assert.equal(option.expiry, '2026-01-16');
+  assert.equal(option.quantity, 2);
+  assert.equal(option.marketValue, 2500);
+  assert.equal(option.optionLabel, "AAPL 200C JAN'26");
+});
+
+test('derives option market value from price × multiplier when missing', () => {
+  const option = normalizeIbkrPosition({
+    conid: '999',
+    ticker: 'TSLA',
+    secType: 'OPT',
+    right: 'P',
+    strike: 250,
+    lastTradingDay: '20260320',
+    position: -1,
+    marketPrice: 4,
+    multiplier: 100
+  });
+
+  assert.equal(option.symbol, 'TSLA');
+  assert.equal(option.right, 'P');
+  assert.equal(option.quantity, -1);
+  assert.equal(option.marketValue, -400);
 });
 
 test('normalizes portfolio2 position rows', () => {

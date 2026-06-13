@@ -1,4 +1,5 @@
 const supportedSecurityTypes = new Set(['STK', 'ETF']);
+const optionSecurityTypes = new Set(['OPT', 'FOP']);
 
 function firstValue(source, keys) {
   for (const key of keys) {
@@ -19,6 +20,86 @@ function numberOrNull(value) {
 
 function cleanSymbol(value) {
   return cleanText(value).toUpperCase().replace(/[^A-Z0-9.-]/g, '').slice(0, 20);
+}
+
+function normalizeOptionRight(value) {
+  const text = cleanText(value).toUpperCase();
+  if (text.startsWith('C')) return 'C';
+  if (text.startsWith('P')) return 'P';
+  return '';
+}
+
+// IBKR hands back expiries as YYYYMMDD (sometimes YYMMDD); normalize to ISO so
+// the frontend can format them however it likes.
+function normalizeOptionExpiry(value) {
+  const text = cleanText(value);
+  const full = text.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (full) return `${full[1]}-${full[2]}-${full[3]}`;
+  const short = text.match(/^(\d{2})(\d{2})(\d{2})$/);
+  if (short) return `20${short[1]}-${short[2]}-${short[3]}`;
+  return text;
+}
+
+const monthAbbr = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+// Compact, human-readable leg label, e.g. "AAPL 200C Jun'26".
+function buildOptionLabel({ underlying, right, strike, expiry, fallback }) {
+  const parts = [];
+  if (underlying) parts.push(underlying);
+  if (strike != null && right) {
+    parts.push(`${strike}${right}`);
+  } else if (strike != null) {
+    parts.push(String(strike));
+  } else if (right) {
+    parts.push(right === 'C' ? 'CALL' : 'PUT');
+  }
+  const iso = expiry.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const month = monthAbbr[Number(iso[2]) - 1] || iso[2];
+    parts.push(`${month}'${iso[1].slice(2)}`);
+  } else if (expiry) {
+    parts.push(expiry);
+  }
+  return parts.join(' ') || fallback || '';
+}
+
+// IBKR option rows carry the underlying ticker plus contract specifics. We key
+// the row on the option's own conid but expose `symbol` as the *underlying* so
+// the frontend can fold the leg into the matching share position.
+function normalizeOptionPosition(raw, conid) {
+  const underlying = cleanSymbol(firstValue(raw, ['undSym', 'underSymbol', 'underlyingSymbol', 'ticker', 'symbol']));
+  if (!conid || !underlying) return null;
+
+  const quantity = numberOrNull(firstValue(raw, ['position', 'quantity', 'qty']));
+  const marketPrice = numberOrNull(firstValue(raw, ['mktPrice', 'marketPrice', 'price']));
+  const multiplier = numberOrNull(firstValue(raw, ['multiplier', 'mult'])) || 100;
+  const marketValue = numberOrNull(firstValue(raw, ['mktValue', 'marketValue', 'value'])) ?? (
+    quantity !== null && marketPrice !== null ? quantity * marketPrice * multiplier : null
+  );
+  const right = normalizeOptionRight(firstValue(raw, ['putOrCall', 'right', 'optType', 'callPut']));
+  const strike = numberOrNull(firstValue(raw, ['strike', 'strikePrice']));
+  const expiry = normalizeOptionExpiry(firstValue(raw, ['expiry', 'lastTradingDay', 'maturityDate', 'expirationDate']));
+  const contractDesc = cleanText(firstValue(raw, ['contractDesc', 'description', 'localSymbol']));
+
+  return {
+    conid,
+    symbol: underlying,
+    name: cleanText(firstValue(raw, ['undComp', 'name', 'companyName'])) || underlying,
+    secType: 'OPT',
+    currency: cleanText(firstValue(raw, ['currency', 'listingExchangeCurrency'])) || 'USD',
+    quantity,
+    avgCost: numberOrNull(firstValue(raw, ['avgCost', 'avgPrice', 'averageCost', 'costBasisPrice'])),
+    marketPrice,
+    marketValue,
+    unrealizedPnl: numberOrNull(firstValue(raw, ['unrealizedPnl', 'unrealizedPNL', 'unrealizedP&L'])),
+    realizedPnl: numberOrNull(firstValue(raw, ['realizedPnl', 'realizedPNL', 'realizedP&L'])),
+    underlying,
+    right,
+    strike,
+    expiry,
+    multiplier,
+    optionLabel: buildOptionLabel({ underlying, right, strike, expiry, fallback: contractDesc })
+  };
 }
 
 // `db` is the adapter from server/db.mjs: { query(text, params), exec(text), tx(fn) }.
@@ -88,9 +169,11 @@ export function normalizeIbkrAccount(raw) {
 
 export function normalizeIbkrPosition(raw) {
   const secType = cleanText(firstValue(raw, ['assetClass', 'secType', 'sectype', 'securityType'])).toUpperCase();
+  const conid = cleanText(firstValue(raw, ['conid', 'conId', 'contract_id', 'contractId']));
+
+  if (optionSecurityTypes.has(secType)) return normalizeOptionPosition(raw, conid);
   if (!supportedSecurityTypes.has(secType)) return null;
 
-  const conid = cleanText(firstValue(raw, ['conid', 'conId', 'contract_id', 'contractId']));
   const symbol = cleanSymbol(firstValue(raw, ['ticker', 'symbol', 'contractDesc', 'description', 'localSymbol']));
   if (!conid || !symbol) return null;
 
@@ -247,21 +330,39 @@ export async function readIbkrSnapshot(db, accountId = null) {
       accountId: account.account_id,
       accountTitle: account.account_title || account.account_id
     },
-    positions: positions.map((position) => ({
-      conid: position.conid,
-      symbol: position.symbol,
-      name: position.name || position.symbol,
-      secType: position.sec_type,
-      currency: position.currency,
-      quantity: position.quantity,
-      avgCost: position.avg_cost,
-      marketPrice: position.market_price,
-      marketValue: position.market_value,
-      unrealizedPnl: position.unrealized_pnl,
-      realizedPnl: position.realized_pnl,
-      fetchedAt: position.fetched_at,
-      source: 'ibkr'
-    })),
+    positions: positions.map((position) => {
+      const base = {
+        conid: position.conid,
+        symbol: position.symbol,
+        name: position.name || position.symbol,
+        secType: position.sec_type,
+        currency: position.currency,
+        quantity: position.quantity,
+        avgCost: position.avg_cost,
+        marketPrice: position.market_price,
+        marketValue: position.market_value,
+        unrealizedPnl: position.unrealized_pnl,
+        realizedPnl: position.realized_pnl,
+        fetchedAt: position.fetched_at,
+        source: 'ibkr'
+      };
+      // Option specifics (strike / right / expiry / label) only live in the
+      // stored payload, so unpack them back onto the snapshot for OPT rows.
+      if (position.sec_type === 'OPT') {
+        let extra = {};
+        try { extra = JSON.parse(position.payload || '{}'); } catch { extra = {}; }
+        return {
+          ...base,
+          underlying: extra.underlying || position.symbol,
+          right: extra.right || '',
+          strike: extra.strike ?? null,
+          expiry: extra.expiry || '',
+          multiplier: extra.multiplier || 100,
+          optionLabel: extra.optionLabel || ''
+        };
+      }
+      return base;
+    }),
     balances: balances.map((balance) => ({
       currency: balance.currency,
       cashBalance: balance.cash_balance,

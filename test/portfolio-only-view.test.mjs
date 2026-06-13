@@ -11,7 +11,7 @@ test('renders the holdings workspace without the backtest view switcher', () => 
   assert.doesNotMatch(app, /className="viewTabs"/);
   assert.match(entry, /render\(<PortfolioApp \/>\)/);
   assert.match(app, /<main className="workspace">\s*\{portfolioView\}\s*<\/main>/);
-  assert.match(html, /<title>Portfolio Holdings<\/title>/);
+  assert.match(html, /<title>Control<\/title>/);
 });
 
 test('uses a Google Finance-inspired holdings and research layout', () => {
@@ -28,6 +28,6 @@ test('summarizes IBKR cash alongside security positions', () => {
 });
 
 test('shows each holding weight against total portfolio value', () => {
-  assert.match(app, /holdingWeightPercent\(marketValue, portfolioTotalValue\)/);
-  assert.match(app, /className="holdingWeight"/);
+  assert.match(app, /holdingWeightPercent\(shareValue \+ optionsValue, portfolioTotalValue\)/);
+  assert.match(app, /weightPercent === null \? 'n\/a' : `\$\{weightPercent\.toFixed\(2\)\}%`/);
 });
