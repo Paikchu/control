@@ -88,12 +88,14 @@ export function ibkrRequest(pathname, { method = 'GET', body = null, timeoutMs =
 
 // 应用（可能在容器内）通过 host.docker.internal 访问 Gateway，但用户的浏览器
 // 打不开这个域名——登录链接必须用浏览器可达的主机名。IBKR_LOGIN_URL 可显式覆盖。
+// 一律用 localhost：网关自签证书的 CN/SAN 是 localhost，用 127.0.0.1 登录会触发
+// 额外的证书不匹配告警、且与浏览器里其它 localhost cookie 不同源，登录更容易卡。
 function browserLoginUrl(base) {
   if (process.env.IBKR_LOGIN_URL) return process.env.IBKR_LOGIN_URL;
   const url = new URL(base);
   url.pathname = '';
   url.search = '';
-  if (url.hostname === 'host.docker.internal') url.hostname = 'localhost';
+  if (['host.docker.internal', '127.0.0.1', '::1'].includes(url.hostname)) url.hostname = 'localhost';
   return url.toString();
 }
 
@@ -178,6 +180,13 @@ function describeOfflineError(error) {
   return `IBKR Gateway 不可用（${target}）：${error?.message || '未知错误'}`;
 }
 
+// 刚登录完 ssodh/init 后会话是 authenticated 但 established=false，此时直接拉
+// /portfolio/accounts 会吃 403。先 tickle 一次把 brokerage 会话 establish 起来，
+// 再开始同步，避免「登录成功却立刻 403」。失败不致命，下方同步仍可重试。
+export async function tickleIbkr() {
+  return ibkrRequest('/tickle');
+}
+
 export async function getIbkrAccounts() {
   const payload = await ibkrRequest('/portfolio/accounts');
   const rawAccounts = Array.isArray(payload) ? payload : payload?.accounts || [];
@@ -232,8 +241,26 @@ async function getIbkrBalances(accountId) {
   }
 }
 
+// 网关刚 establish 时偶发 403（会话尚未就绪或并发撞限流）。tickle 预热 + 对账户
+// 列表做一次短重试，把「登录后首拉 403」这类瞬时失败兜住。
+async function getIbkrAccountsWithWarmup() {
+  try {
+    await tickleIbkr();
+  } catch {
+    // tickle 失败不致命，继续尝试拉账户。
+  }
+  try {
+    return await getIbkrAccounts();
+  } catch (error) {
+    if (error.statusCode !== 403) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await tickleIbkr().catch(() => {});
+    return getIbkrAccounts();
+  }
+}
+
 export async function syncIbkrAccount(db, accountId = '') {
-  const accounts = await getIbkrAccounts();
+  const accounts = await getIbkrAccountsWithWarmup();
   const account = accounts.find((item) => item.accountId === accountId) || accounts[0];
   if (!account) throw new Error('No IBKR account available');
   const positions = await getIbkrPositions(account.accountId);

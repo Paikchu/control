@@ -1,5 +1,5 @@
 import { normalizeEntryPlan, normalizeHoldingItems } from '../holdingNotes.mjs';
-import { defaultPortfolio, ibkrAccountStorageKey, localCompanyName, normalizeTicker, portfolioStorageKey } from './catalog.js';
+import { ibkrAccountStorageKey, localCompanyName, normalizeTicker, portfolioStorageKey } from './catalog.js';
 
 export function normalizeStoredHolding(holding, index) {
   const symbol = normalizeTicker(String(holding?.symbol || ''));
@@ -21,15 +21,15 @@ export function normalizeStoredHolding(holding, index) {
 }
 
 export function readStoredPortfolio() {
-  if (typeof window === 'undefined') return defaultPortfolio.map(normalizeStoredHolding).filter(Boolean);
+  if (typeof window === 'undefined') return [];
   try {
     const saved = window.localStorage.getItem(portfolioStorageKey);
-    if (saved === null) return defaultPortfolio.map(normalizeStoredHolding).filter(Boolean);
+    if (saved === null) return [];
     const parsed = JSON.parse(saved);
-    if (!Array.isArray(parsed)) return defaultPortfolio.map(normalizeStoredHolding).filter(Boolean);
+    if (!Array.isArray(parsed)) return [];
     return parsed.map(normalizeStoredHolding).filter(Boolean);
-  } catch (error) {
-    return defaultPortfolio.map(normalizeStoredHolding).filter(Boolean);
+  } catch {
+    return [];
   }
 }
 
