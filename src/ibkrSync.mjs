@@ -63,23 +63,59 @@ function buildOptionLabel({ underlying, right, strike, expiry, fallback }) {
   return parts.join(' ') || fallback || '';
 }
 
+// 新的 /portfolio2 端点的期权行不带 undSym/strike/putOrCall/expiry 等结构化字段，
+// 标的、行权价、方向、到期全编码在 description 里，例如：
+//   "NVDA   JAN2027 180 P [NVDA  270115P00180000 100]"
+// 优先解析方括号里的 OCC 代码（ROOT YYMMDD{C|P}STRIKE×1000 MULT），最精确；
+// 没有方括号时退化解析可读部分。解析失败返回 null，让结构化字段照常生效。
+function parseOptionDescription(desc) {
+  const text = cleanText(desc);
+  if (!text) return null;
+  const occ = text.match(/\[([A-Za-z.]+)\s+(\d{6})([CP])(\d{8})(?:\s+(\d+))?\]/);
+  if (occ) {
+    return {
+      underlying: cleanSymbol(occ[1]),
+      expiry: `20${occ[2].slice(0, 2)}-${occ[2].slice(2, 4)}-${occ[2].slice(4, 6)}`,
+      right: occ[3],
+      strike: parseInt(occ[4], 10) / 1000,
+      multiplier: occ[5] ? Number(occ[5]) : null
+    };
+  }
+  const readable = text.match(/^([A-Za-z.]+)\s+([A-Z]{3})(\d{4})\s+([\d.]+)\s+([CP])/);
+  if (readable) {
+    const month = monthAbbr.indexOf(readable[2].toUpperCase()) + 1;
+    return {
+      underlying: cleanSymbol(readable[1]),
+      // 可读部分没有「日」，只能给到月，留空 day 避免编造错误日期。
+      expiry: month ? `${readable[3]}-${String(month).padStart(2, '0')}` : '',
+      right: readable[5],
+      strike: numberOrNull(readable[4]),
+      multiplier: null
+    };
+  }
+  return null;
+}
+
 // IBKR option rows carry the underlying ticker plus contract specifics. We key
 // the row on the option's own conid but expose `symbol` as the *underlying* so
 // the frontend can fold the leg into the matching share position.
 function normalizeOptionPosition(raw, conid) {
-  const underlying = cleanSymbol(firstValue(raw, ['undSym', 'underSymbol', 'underlyingSymbol', 'ticker', 'symbol']));
+  const contractDesc = cleanText(firstValue(raw, ['contractDesc', 'description', 'localSymbol']));
+  // /portfolio2 端点只给 description；老端点给结构化字段。结构化字段优先，description 兜底。
+  const parsed = parseOptionDescription(contractDesc) || {};
+  const underlying = cleanSymbol(firstValue(raw, ['undSym', 'underSymbol', 'underlyingSymbol', 'ticker', 'symbol'])) || parsed.underlying || '';
   if (!conid || !underlying) return null;
 
   const quantity = numberOrNull(firstValue(raw, ['position', 'quantity', 'qty']));
   const marketPrice = numberOrNull(firstValue(raw, ['mktPrice', 'marketPrice', 'price']));
-  const multiplier = numberOrNull(firstValue(raw, ['multiplier', 'mult'])) || 100;
+  const multiplier = numberOrNull(firstValue(raw, ['multiplier', 'mult'])) || parsed.multiplier || 100;
   const marketValue = numberOrNull(firstValue(raw, ['mktValue', 'marketValue', 'value'])) ?? (
     quantity !== null && marketPrice !== null ? quantity * marketPrice * multiplier : null
   );
-  const right = normalizeOptionRight(firstValue(raw, ['putOrCall', 'right', 'optType', 'callPut']));
-  const strike = numberOrNull(firstValue(raw, ['strike', 'strikePrice']));
-  const expiry = normalizeOptionExpiry(firstValue(raw, ['expiry', 'lastTradingDay', 'maturityDate', 'expirationDate']));
-  const contractDesc = cleanText(firstValue(raw, ['contractDesc', 'description', 'localSymbol']));
+  const right = normalizeOptionRight(firstValue(raw, ['putOrCall', 'right', 'optType', 'callPut'])) || parsed.right || '';
+  const strike = numberOrNull(firstValue(raw, ['strike', 'strikePrice'])) ?? (parsed.strike ?? null);
+  const expiryRaw = firstValue(raw, ['expiry', 'lastTradingDay', 'maturityDate', 'expirationDate']);
+  const expiry = expiryRaw ? normalizeOptionExpiry(expiryRaw) : (parsed.expiry || '');
 
   return {
     conid,

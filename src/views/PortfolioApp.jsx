@@ -1,15 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { ArrowDown, ArrowUp, Briefcase, ChevronDown, ChevronRight, ExternalLink, Link2, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, Briefcase, ChevronDown, ChevronRight, ExternalLink, Link2, RefreshCw, Search } from 'lucide-react';
 import { normalizeEntryPlan, normalizeHoldingItems } from '../holdingNotes.mjs';
-import { holdingWeightPercent, summarizeIbkrCash } from '../ibkrCash.mjs';
+import { summarizeIbkrCash } from '../ibkrCash.mjs';
 import { apiBase } from '../api/client.js';
 import { companyNameByTicker, ibkrAccountStorageKey, localCompanyName, normalizeTicker, portfolioStorageKey, thesisChecksStorageKey } from '../lib/catalog.js';
-import { formatMoney, hasNumber, indexNumberFormat } from '../lib/format.js';
+import { formatMoney, indexNumberFormat } from '../lib/format.js';
 import { ibkrStatusMessage, mergeIbkrPortfolio, readStoredIbkrAccountId, readStoredPortfolio } from '../lib/holdings.js';
 import { AddHoldingModal } from '../components/AddHoldingModal.jsx';
 import { HoldingDetail } from '../components/HoldingDetail.jsx';
-import { HoldingOptionLegs } from '../components/HoldingOptionLegs.jsx';
+import { HoldingTickerGroup } from '../components/HoldingTickerGroup.jsx';
 import { MarketGammaPill } from '../components/MarketGammaPill.jsx';
 import { SectorHeatmap } from '../components/SectorHeatmap.jsx';
 
@@ -40,11 +40,13 @@ export function PortfolioApp() {
   const [filingSummaryStatus, setFilingSummaryStatus] = useState({});
   const [holdingTab, setHoldingTab] = useState('thesis');
   const [holdingQuery, setHoldingQuery] = useState('');
+  const [collapsedTickers, setCollapsedTickers] = useState(() => new Set());
   const [showPortfolioOverview, setShowPortfolioOverview] = useState(false);
   const [dailyChanges, setDailyChanges] = useState({});
   const [dailyChangesStatus, setDailyChangesStatus] = useState('idle');
   const [marketOverview, setMarketOverview] = useState(null);
   const filingSummaryRequests = useRef(new Set());
+  const ibkrLoginPollRef = useRef(null);
   const [thesisChecks, setThesisChecks] = useState(() => {
     try { return JSON.parse(localStorage.getItem(thesisChecksStorageKey) || '{}'); } catch { return {}; }
   });
@@ -181,6 +183,15 @@ export function PortfolioApp() {
     setShowPortfolioOverview(false);
   }
 
+  function toggleTickerExpanded(holdingId) {
+    setCollapsedTickers((current) => {
+      const next = new Set(current);
+      if (next.has(holdingId)) next.delete(holdingId);
+      else next.add(holdingId);
+      return next;
+    });
+  }
+
   async function fetchDailyChanges() {
     const symbols = displayedPortfolio.map((h) => h.symbol).filter(Boolean);
     if (!symbols.length) return;
@@ -276,6 +287,33 @@ export function PortfolioApp() {
       setIbkrError(error.message || 'IBKR 同步失败');
       setIbkrSyncStatus('error');
     }
+  }
+
+  // 网关登录页（/sso/Dispatcher）登录成功后只会停在「Client login succeeds」——那页
+  // 由网关自身托管，改不了它的跳转。所以用弹窗登录：开一个登录弹窗，主页这边轮询
+  // 登录态，认证成功就自动关弹窗并同步，用户全程留在主页。
+  function openIbkrLogin() {
+    const url = ibkrStatus.loginUrl || 'https://localhost:5001';
+    const popup = window.open(url, 'ibkrLogin', 'width=520,height=700');
+    setIbkrError('请在弹窗中完成 IBKR 登录与 2FA，成功后会自动返回并同步。');
+    if (ibkrLoginPollRef.current) clearInterval(ibkrLoginPollRef.current);
+    const startedAt = Date.now();
+    ibkrLoginPollRef.current = setInterval(async () => {
+      // 弹窗被手动关闭或超过 3 分钟未完成：停止轮询。
+      if ((popup && popup.closed) || Date.now() - startedAt > 180000) {
+        clearInterval(ibkrLoginPollRef.current);
+        ibkrLoginPollRef.current = null;
+        return;
+      }
+      const status = await loadIbkrStatus({ preserveError: true });
+      if (status?.authenticated) {
+        clearInterval(ibkrLoginPollRef.current);
+        ibkrLoginPollRef.current = null;
+        try { if (popup && !popup.closed) popup.close(); } catch {}
+        setIbkrError('');
+        await refreshIbkr();
+      }
+    }, 2500);
   }
 
   function changeIbkrAccount(accountId) {
@@ -435,6 +473,11 @@ export function PortfolioApp() {
       // Local persistence is best-effort; the editable in-memory list still works.
     }
   }, [portfolio]);
+
+  // 卸载时清掉登录轮询定时器，避免泄漏。
+  useEffect(() => () => {
+    if (ibkrLoginPollRef.current) clearInterval(ibkrLoginPollRef.current);
+  }, []);
 
   useEffect(() => {
     try {
@@ -625,7 +668,7 @@ export function PortfolioApp() {
                             ))}
                           </select>
                         )}
-                        <a className="ibkrLoginLink" href={ibkrStatus.loginUrl || 'https://localhost:5001'} target="_blank" rel="noreferrer"><ExternalLink size={14} />打开登录页</a>
+                        <button className="ibkrLoginLink" type="button" onClick={openIbkrLogin}><ExternalLink size={14} />打开登录页</button>
                         <button className="iconTextButton" onClick={refreshIbkr} disabled={ibkrSyncStatus === 'syncing'}>
                           <RefreshCw size={14} />
                           {ibkrSyncStatus === 'syncing' ? '同步中' : '刷新状态'}
@@ -717,124 +760,34 @@ export function PortfolioApp() {
           {/* Header table — fixed, never scrolls. Reserves the same scrollbar
               gutter as the body below so their columns line up. */}
           <div className="overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-[7px] border-b border-b-[#e6e9ed] bg-[rgba(255,255,255,0.96)]">
-            <table className="w-full table-fixed border-collapse">
-              <colgroup>
-                <col />
-                <col className="w-[20%]" />
-                <col className="w-[20%]" />
-                <col className="w-[20%]" />
-                <col className="w-[30px]" />
-              </colgroup>
-              <thead>
-                <tr className="h-9 text-[0.72rem] font-[720] tracking-[0.02em] text-[#5f6368] whitespace-nowrap [&>th]:px-2.5">
-                  <th scope="col" className="text-left pl-6">股票</th>
-                  <th scope="col" className="text-right">市值</th>
-                  <th scope="col" className="text-right">价格 / P&amp;L</th>
-                  <th scope="col" className="text-right">走势</th>
-                  <th scope="col" className="!p-0"></th>
-                </tr>
-              </thead>
-            </table>
+            <div className="flex h-9 items-center gap-2 pl-9 pr-3 text-[0.72rem] font-[720] tracking-[0.02em] text-[#5f6368] whitespace-nowrap">
+              <span className="flex-1 text-left">标的</span>
+              <span className="w-[92px] shrink-0 text-right">市值</span>
+              <span className="w-[84px] shrink-0 text-right">盈亏</span>
+              <span className="w-5 shrink-0" aria-hidden="true" />
+            </div>
           </div>
           {/* Body table — scrolls vertically; the thin 7px scrollbar sits in the
               reserved gutter so it starts below the header, not beside it. */}
           <div className="min-h-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] bg-white [scrollbar-width:thin] [&::-webkit-scrollbar]:w-[7px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[rgba(100,116,139,0.34)]">
-            <table className="w-full table-fixed border-collapse">
-              <colgroup>
-                <col />
-                <col className="w-[20%]" />
-                <col className="w-[20%]" />
-                <col className="w-[20%]" />
-                <col className="w-[30px]" />
-              </colgroup>
-              <tbody>
-                {filteredPortfolio.map((holding, index) => {
-                  const isOpen = !showPortfolioOverview && expandedHolding === holding.id;
-                  const isIbkr = holding.source === 'ibkr';
-                  const shareValue = Number(holding.marketValue) || (Number(holding.shares) || 0) * (Number(holding.marketPrice ?? holding.cost) || 0);
-                  const optionLegs = Array.isArray(holding.options) ? holding.options : [];
-                  const hasOptions = optionLegs.length > 0;
-                  const optionsValue = Number(holding.optionsMarketValue) || 0;
-                  const isOptionOnly = holding.optionsOnly || (!(Number(holding.shares) > 0) && hasOptions);
-                  const headlineValue = isOptionOnly ? optionsValue : shareValue;
-                  const weightPercent = holdingWeightPercent(shareValue + optionsValue, portfolioTotalValue);
-                  const pnl = Number(holding.unrealizedPnl);
-                  const marketPrice = Number(holding.marketPrice);
-                  const cost = Number(holding.cost);
-                  const valueBtn = 'grid w-full min-h-12 border-0 bg-transparent py-1.5 cursor-pointer content-center justify-items-end gap-[2px] text-right';
-                  return (
-                    <React.Fragment key={holding.id}>
-                    <tr
-                      className={`transition-colors [animation:holdingRowEnter_420ms_var(--ease-out-quint)_both] ${hasOptions ? '' : 'border-b border-b-[#eceff2]'} ${isOpen ? 'bg-[#eef4ff]' : 'bg-white hover:bg-[#f5f8fd]'}`}
-                      style={{ animationDelay: `${Math.min(index, 8) * 35}ms` }}
-                    >
-                      <td className={`align-middle p-0 pl-6 ${isOpen ? '[box-shadow:inset_3px_0_0_#0b57d0]' : ''}`}>
-                        <button
-                          className="grid w-full min-h-12 border-0 bg-transparent py-1.5 cursor-pointer content-center justify-items-start gap-[3px] text-left"
-                          onClick={() => selectHolding(holding.id)}
-                          aria-pressed={isOpen}
-                        >
-                          <span className="flex max-w-full items-center gap-1.5 text-[0.88rem] font-[790] tracking-[0.01em] text-[#202124]">
-                            {holding.symbol || 'TICKER'} <em className="text-[0.57rem] text-[#7a7f87] not-italic">{isIbkr ? 'IBKR' : '本地'}</em>
-                            {hasOptions && (
-                              <em className="rounded-full bg-[#eef2ff] px-1.5 py-0.5 text-[0.54rem] font-bold not-italic tracking-wide text-[#4f46e5]">
-                                {optionLegs.length} 期权
-                              </em>
-                            )}
-                          </span>
-                          <small className="max-w-full truncate text-[0.68rem] font-[570] leading-[1.2] text-[#74787f]">
-                            {companyNameByTicker[holding.symbol] || holding.name || holding.symbol}
-                          </small>
-                          <span className="flex gap-2 text-[0.62rem] font-[600] leading-[1.2] text-[#9aa3b0]">
-                            {isOptionOnly
-                              ? <span>仅期权</span>
-                              : holding.shares != null && <span>数量 {holding.shares}</span>}
-                            {!isOptionOnly && Number.isFinite(cost) && cost > 0 && <span>成本 {isIbkr ? cost.toFixed(1) : holding.cost}</span>}
-                          </span>
-                        </button>
-                      </td>
-                      <td className="align-middle p-0 px-2.5 text-right">
-                        <button className={valueBtn} onClick={() => selectHolding(holding.id)} aria-pressed={isOpen}>
-                          <strong className="max-w-full truncate text-[0.76rem] font-[740] leading-[1.2] text-[#303134]">{formatMoney(headlineValue)}</strong>
-                          <small className="text-[0.66rem] font-[720] leading-[1.2] text-[#5f6368]">{weightPercent === null ? 'n/a' : `${weightPercent.toFixed(2)}%`}</small>
-                        </button>
-                      </td>
-                      <td className="align-middle p-0 px-2.5 text-right">
-                        <button className={valueBtn} onClick={() => selectHolding(holding.id)} aria-pressed={isOpen}>
-                          <strong className="max-w-full truncate text-[0.76rem] font-[740] leading-[1.2] text-[#303134]">{isOptionOnly ? '—' : hasNumber(marketPrice) ? formatMoney(marketPrice) : 'n/a'}</strong>
-                          <small className={`text-[0.67rem] font-[730] leading-[1.2] ${hasNumber(pnl) ? pnl >= 0 ? 'gain' : 'loss' : ''}`}>{hasNumber(pnl) ? formatMoney(pnl) : 'n/a'}</small>
-                        </button>
-                      </td>
-                      <td className="align-middle p-0 px-2.5 text-right">
-                        {(() => {
-                          const pct = dailyChanges[holding.symbol]?.changePct;
-                          if (!Number.isFinite(pct)) return null;
-                          return <span className={`text-[0.76rem] font-[740] leading-[1.2] ${pct >= 0 ? 'gain' : 'loss'}`}>{pct >= 0 ? '+' : ''}{pct.toFixed(2)}%</span>;
-                        })()}
-                      </td>
-                      <td className="align-middle p-0 pr-2.5 text-right">
-                        {!isIbkr ? (
-                          <button className="flex h-12 w-full items-center justify-end border-0 bg-transparent p-0 cursor-pointer text-[#64748b]" onClick={() => removeHolding(holding.id)} aria-label={`删除 ${holding.symbol || '股票'}`}>
-                            <Trash2 size={14} />
-                          </button>
-                        ) : <span aria-hidden="true"></span>}
-                      </td>
-                    </tr>
-                    {hasOptions && (
-                      <tr className={`border-b border-b-[#eceff2] ${isOpen ? 'bg-[#eef4ff]' : 'bg-white'}`}>
-                        <td colSpan={5} className={`p-0 ${isOpen ? '[box-shadow:inset_3px_0_0_#0b57d0]' : ''}`}>
-                          <HoldingOptionLegs legs={optionLegs} compact />
-                        </td>
-                      </tr>
-                    )}
-                    </React.Fragment>
-                  );
-                })}
-                {filteredPortfolio.length === 0 && (
-                  <tr><td colSpan={5} className="px-5 py-6 text-center text-[0.78rem] text-[#9aa3b0]">没有匹配的持仓。</td></tr>
-                )}
-              </tbody>
-            </table>
+            {filteredPortfolio.map((holding) => (
+              <HoldingTickerGroup
+                key={holding.id}
+                holding={holding}
+                isOpen={!showPortfolioOverview && expandedHolding === holding.id}
+                isIbkr={holding.source === 'ibkr'}
+                companyName={companyNameByTicker[holding.symbol] || holding.name || holding.symbol}
+                dailyChangePct={dailyChanges[holding.symbol]?.changePct}
+                portfolioTotalValue={portfolioTotalValue}
+                expanded={!collapsedTickers.has(holding.id)}
+                onToggle={() => toggleTickerExpanded(holding.id)}
+                onSelect={selectHolding}
+                onRemove={removeHolding}
+              />
+            ))}
+            {filteredPortfolio.length === 0 && (
+              <div className="px-5 py-6 text-center text-[0.78rem] text-[#9aa3b0]">没有匹配的持仓。</div>
+            )}
           </div>
         </aside>
 

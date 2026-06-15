@@ -88,6 +88,32 @@ test('normalizes option positions onto the underlying ticker', () => {
   assert.equal(option.optionLabel, "AAPL 200C JAN'26");
 });
 
+test('parses option contract from /portfolio2 description when structured fields are absent', () => {
+  // 真实的 /portfolio2 期权行：只有 conid + description，无 undSym/strike/putOrCall/expiry。
+  const option = normalizeIbkrPosition({
+    position: -1,
+    conid: '730765112',
+    avgCost: 1733.9127,
+    currency: 'USD',
+    description: 'NVDA   JAN2027 180 P [NVDA  270115P00180000 100]',
+    marketPrice: 14.138372,
+    marketValue: -1413.84,
+    unrealizedPnl: 320.08,
+    secType: 'OPT',
+    assetClass: 'OPT'
+  });
+
+  assert.equal(option.secType, 'OPT');
+  assert.equal(option.symbol, 'NVDA');
+  assert.equal(option.underlying, 'NVDA');
+  assert.equal(option.right, 'P');
+  assert.equal(option.strike, 180);
+  assert.equal(option.expiry, '2027-01-15');
+  assert.equal(option.multiplier, 100);
+  assert.equal(option.quantity, -1);
+  assert.equal(option.optionLabel, "NVDA 180P JAN'27");
+});
+
 test('derives option market value from price × multiplier when missing', () => {
   const option = normalizeIbkrPosition({
     conid: '999',
