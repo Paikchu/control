@@ -29,8 +29,9 @@ export function MarketIndexTile({ index, options }) {
   const up = index.change >= 0;
   const bias = options ? biasMeta(options.bias) : null;
 
+  const isVix = index.symbol === '^VIX' || index.name?.toUpperCase() === 'VIX';
   return (
-    <div className={`marketTile ${up ? 'up' : 'down'} ${options ? 'marketTileWide' : ''}`}>
+    <div className={`marketTile ${up ? 'up' : 'down'} ${options ? 'marketTileWide' : ''} ${isVix ? 'vixTile' : ''}`}>
       <div className="marketTileInfo">
         <span className="marketTileName">{index.name}</span>
         <strong>{indexNumberFormat.format(index.price)}</strong>

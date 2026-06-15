@@ -12,9 +12,8 @@ services:
       interval: 3s
       timeout: 3s
       retries: 15
-    # 本机调试需要直连数据库时再放开：
-    # ports:
-    #   - "5442:5432"
+    ports:
+      - "5442:5432"
 
   app:
     build: .

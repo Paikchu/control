@@ -108,6 +108,9 @@ export function PortfolioApp() {
   const ibkrCashSummary = useMemo(() => summarizeIbkrCash(ibkrSnapshot), [ibkrSnapshot]);
   const portfolioTotalValue = ibkrCashSummary.netLiquidation ?? portfolioMarketValue;
   const selectedHolding = displayedPortfolio.find((holding) => holding.id === expandedHolding) ?? displayedPortfolio[0];
+  const selectedDailyChange = selectedHolding ? dailyChanges[selectedHolding.symbol] : null;
+  const selectedDailyChangePct = selectedDailyChange?.changePct ?? (selectedHolding?.marketPrice != null && selectedHolding?.change != null ? (selectedHolding.change / (selectedHolding.marketPrice - selectedHolding.change)) * 100 : null);
+  const selectedMarketPrice = selectedHolding?.marketPrice != null ? Number(selectedHolding.marketPrice) : null;
   const hasIbkrAccess = ibkrStatus.authenticated || ibkrAccounts.length > 0 || Boolean(ibkrSnapshot?.lastSyncAt);
 
   function updateHolding(holdingId, key, value) {
@@ -825,6 +828,8 @@ export function PortfolioApp() {
                 className="holdingDetailDesktop"
                 holdingTab={holdingTab}
                 setHoldingTab={setHoldingTab}
+                dailyChangePct={selectedDailyChangePct}
+                marketPrice={selectedMarketPrice}
                 secFilings={secFilings}
                 secStatus={secStatus}
                 secReports={secReports}

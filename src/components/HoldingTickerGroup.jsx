@@ -2,6 +2,7 @@ import React from 'react';
 import { ChevronDown, ChevronRight, Trash2, TrendingUp, TrendingDown } from 'lucide-react';
 import { holdingWeightPercent } from '../ibkrCash.mjs';
 import { formatMoney, hasNumber } from '../lib/format.js';
+import { useFlash } from '../lib/useFlash.js';
 
 // 一个 ticker = 轻量分组头（只放股价 + 今日涨跌幅）+ 二级菜单里平权的子行：
 // 正股一行、每条期权腿一行，各自带市值与盈亏，正股和期权重要性相同。
@@ -25,6 +26,9 @@ export function HoldingTickerGroup({
   const sharePnl = Number(holding.unrealizedPnl);
   // Number(null) 会变 0，会让纯期权 ticker 的行头显示 $0；缺价时保留 NaN → 显示 n/a。
   const marketPrice = holding.marketPrice == null ? NaN : Number(holding.marketPrice);
+
+  const priceFlash = useFlash(Number.isFinite(marketPrice) ? marketPrice : null);
+  const pnlFlash = useFlash(hasNumber(sharePnl) ? sharePnl : null);
 
   // 子行右侧两列固定宽，和 sticky 表头对齐：市值列 / 盈亏列。
   // 注意：不要用 Tailwind 的 `block` 工具类——本项目 styles.css 有同名 `.block`
@@ -67,7 +71,7 @@ export function HoldingTickerGroup({
           </span>
           {/* Google Finance 风格行头：股价突出，下面是带方向三角的今日涨跌幅。 */}
           <span className="flex shrink-0 flex-col items-end gap-0.5 pr-1">
-            <strong className="text-[0.95rem] font-[760] leading-[1.15] text-[#202124]">
+            <strong className={`text-[0.95rem] font-[760] leading-[1.15] text-[#202124] ${priceFlash ? `flash-${priceFlash}` : ''}`}>
               {hasNumber(marketPrice) ? formatMoney(marketPrice) : 'n/a'}
             </strong>
             <small className={`flex items-center gap-1 text-[0.72rem] font-[740] leading-[1.15] ${Number.isFinite(dailyChangePct) ? (dailyChangePct >= 0 ? 'gain' : 'loss') : 'text-[#9aa3b0]'}`}>
@@ -106,7 +110,7 @@ export function HoldingTickerGroup({
                 <span className="text-[0.62rem] font-[640] leading-[1.2] text-[#9aa3b0]">{shareWeight === null ? 'n/a' : `${shareWeight.toFixed(2)}%`}</span>
               </span>
               <span className={pnlCol}>
-                <span className={`text-[0.74rem] font-[720] leading-[1.2] ${hasNumber(sharePnl) ? (sharePnl >= 0 ? 'gain' : 'loss') : 'text-[#9aa3b0]'}`}>
+                <span className={`text-[0.74rem] font-[720] leading-[1.2] ${hasNumber(sharePnl) ? (sharePnl >= 0 ? 'gain' : 'loss') : 'text-[#9aa3b0]'} ${pnlFlash ? `flash-${pnlFlash}` : ''}`}>
                   {hasNumber(sharePnl) ? formatMoney(sharePnl) : 'n/a'}
                 </span>
               </span>

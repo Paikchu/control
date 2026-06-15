@@ -188,14 +188,22 @@ async function analyzeFilingSummaryWithDeepSeek({ ticker, filing, sections }) {
   }, filing);
 }
 
+const FAILED_SUMMARY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 export async function getSecFilingSummary(db, ticker, accessionNumber) {
   const clean = cleanTicker(ticker);
   const accession = cleanAccession(accessionNumber);
   const { rows } = await db.query(
-    'SELECT payload FROM sec_filing_summaries WHERE ticker = $1 AND accession_number = $2',
+    'SELECT payload, generated_at FROM sec_filing_summaries WHERE ticker = $1 AND accession_number = $2',
     [clean, accession]
   );
-  if (rows[0]?.payload) return JSON.parse(rows[0].payload);
+  if (rows[0]?.payload) {
+    const cached = JSON.parse(rows[0].payload);
+    const hasContent = cached.headline || cached.bullets?.length || cached.analystView;
+    const ageMs = Date.now() - new Date(rows[0].generated_at || 0).getTime();
+    // Return good summaries always; return failed ones within 7-day negative-cache window.
+    if (hasContent || ageMs < FAILED_SUMMARY_TTL_MS) return cached;
+  }
   if (!hasDeepSeekKey()) {
     throw new Error('DEEPSEEK_API_KEY is required for filing summaries');
   }
@@ -207,14 +215,19 @@ export async function getSecFilingSummary(db, ticker, accessionNumber) {
   const text = await getFilingText(db, filing);
   const sections = splitFilingSections(text);
   const summary = await analyzeFilingSummaryWithDeepSeek({ ticker: clean, filing, sections });
-  if (!summary.headline && !summary.bullets.length && !summary.analystView) {
-    throw new Error('AI filing summary did not contain usable analysis');
-  }
 
+  // Always persist — empty/failed results are cached as a negative entry so we don't
+  // re-call DeepSeek on every page visit. Stale failed entries expire after 7 days (see above).
   await db.query(`
     INSERT INTO sec_filing_summaries (ticker, accession_number, generated_at, payload)
     VALUES ($1, $2, $3, $4)
-    ON CONFLICT (ticker, accession_number) DO NOTHING
+    ON CONFLICT (ticker, accession_number) DO UPDATE SET
+      generated_at = EXCLUDED.generated_at,
+      payload = EXCLUDED.payload
   `, [clean, accession, summary.generatedAt, JSON.stringify(summary)]);
+
+  if (!summary.headline && !summary.bullets.length && !summary.analystView) {
+    throw new Error('AI filing summary did not contain usable analysis');
+  }
   return summary;
 }

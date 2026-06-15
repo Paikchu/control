@@ -39,6 +39,9 @@
   --ease-out-quint: cubic-bezier(.22, 1, .36, 1);
   --radius: 10px;
   --radius-tight: 7px;
+  --dur-fast: 150ms;
+  --dur-base: 240ms;
+  --dur-slow: 380ms;
 }
 
 * { box-sizing: border-box; }
@@ -1785,34 +1788,48 @@ textarea:focus {
 
 .holdingListEmpty {
   margin: 0;
-  border-top: 1px solid rgba(226, 232, 240, .92);
-  border-bottom: 1px solid rgba(226, 232, 240, .92);
-  color: #8793a5;
-  padding: 12px 15px;
-  font-size: .78rem;
-  line-height: 1.4;
+  color: #9aa3b0;
+  padding: 10px 0 6px;
+  font-size: .82rem;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+/* Icon + hint empty state */
+.holdingEmptyState {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 4px;
+  color: #9aa3b0;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+.holdingEmptyState svg {
+  flex-shrink: 0;
+  opacity: .65;
 }
 
 .holdingAddItem {
   display: inline-flex;
   width: max-content;
-  min-height: 30px;
+  min-height: 26px;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: #334155;
-  padding: 3px 5px;
+  color: #1d4ed8;
+  padding: 2px 4px;
   font-size: .76rem;
   line-height: 1.2;
-  font-weight: 780;
+  font-weight: 740;
 }
 
 .holdingAddItem:hover,
 .holdingAddItem:focus-visible {
-  background: rgba(37, 99, 235, .07);
-  color: #174aa6;
+  background: rgba(29, 78, 216, .07);
+  color: #1341b0;
   outline: 0;
 }
 
@@ -3064,7 +3081,7 @@ body {
 }
 
 .portfolioDesk {
-  grid-template-rows: 76px minmax(0, 1fr);
+  grid-template-rows: 64px minmax(0, 1fr);
   gap: 0;
   width: 100%;
   height: 100vh;
@@ -3247,17 +3264,24 @@ body {
 }
 
 .moGrid span {
-  color: #74787f;
-  font-size: .58rem;
-  font-weight: 640;
+  color: #9aa1ac;
+  font-size: .56rem;
+  font-weight: 600;
   white-space: nowrap;
 }
 
 .moGrid b {
-  color: #202124;
-  font-size: .64rem;
-  font-weight: 760;
+  color: #3c3f45;
+  font-size: .6rem;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+/* VIX tile separator */
+.marketTile.vixTile::before {
+  width: 1px;
+  height: 32px;
+  background: #d0d3d8;
 }
 
 .moGrid b.pos { color: #0b8a44; }
@@ -3590,6 +3614,7 @@ body {
 
 .holdingTable .holdingRow.open td.cellStock {
   box-shadow: inset 3px 0 0 #0b57d0;
+  transition: box-shadow var(--dur-base) var(--ease-out-quint);
 }
 
 .holdingTable td.cellValue {
@@ -3837,33 +3862,64 @@ body {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  padding-bottom: 10px;
+  padding-bottom: 8px;
   border-bottom: 1px solid #eceff2;
-  margin-bottom: 2px;
+  margin-bottom: 0;
+}
+.holdingDetailMetaLeft {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0;
+  min-width: 0;
 }
 
 .holdingDetailTicker {
-  color: #202124;
-  font-size: 1rem;
-  font-weight: 780;
-  letter-spacing: -.01em;
+  color: #15171c;
+  font-family: var(--font-display);
+  font-size: 1.44rem;
+  font-weight: 800;
+  letter-spacing: -.025em;
+  line-height: 1.1;
 }
 
 .holdingDetailCompany {
-  color: #74787f;
-  font-size: .72rem;
+  color: #9aa1ac;
+  font-size: .69rem;
   font-weight: 560;
   text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  letter-spacing: .01em;
 }
 
+/* T4 price + day-change chip beside ticker */
+.holdingDetailPriceChip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-left: 10px;
+}
+.holdingDetailPrice {
+  font-size: .97rem;
+  font-weight: 760;
+  color: #1a1c1f;
+  font-variant-numeric: tabular-nums;
+}
+.holdingDetailChange {
+  font-size: .78rem;
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+}
+.holdingDetailChange.gain { color: #0b8a44; }
+.holdingDetailChange.loss { color: #d93025; }
+
 .holdingDetailHeader {
-  gap: 14px;
+  gap: 10px;
   border-bottom-color: #e2e5e9;
   background: #fff;
-  padding: 22px clamp(18px, 2.5vw, 34px) 14px;
+  padding: 14px clamp(14px, 2vw, 24px) 10px;
 }
 
 .detailHero span {
@@ -3884,7 +3940,7 @@ body {
 
 .holdingTabs {
   position: relative;
-  gap: 24px;
+  gap: 20px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -3893,32 +3949,33 @@ body {
 
 .holdingTabs button {
   position: relative;
-  height: 34px;
+  height: 30px;
   border-radius: 0;
-  color: #6f747b;
-  padding: 0 1px;
-  font-size: .78rem;
-  font-weight: 720;
-  transition: color 180ms var(--ease-out-quart);
+  color: #7a7f87;
+  padding: 0 2px;
+  font-size: .74rem;
+  font-weight: 680;
+  transition: color var(--dur-fast) var(--ease-out-quart);
 }
 
 .holdingTabs button::after {
   content: "";
   position: absolute;
   right: 0;
-  bottom: -15px;
+  bottom: -11px;
   left: 0;
   height: 2px;
   border-radius: 2px 2px 0 0;
   background: #0b57d0;
   opacity: 0;
-  transform: scaleX(.45);
-  transition: opacity 180ms var(--ease-out-quart), transform 240ms var(--ease-out-quint);
+  transform: scaleX(.3);
+  transition: opacity var(--dur-fast) var(--ease-out-quart), transform var(--dur-base) var(--ease-out-quint);
 }
 
 .holdingTabs button.active {
   background: transparent;
   color: #0b57d0;
+  font-weight: 740;
 }
 
 .holdingTabs button.active::after {
@@ -3927,27 +3984,36 @@ body {
 }
 
 .holdingTabBody {
-  padding: 22px clamp(18px, 2.5vw, 34px) 32px;
-  animation: reportContentEnter 260ms var(--ease-out-quint) both;
+  padding: 16px clamp(14px, 2vw, 24px) 24px;
+  animation: reportContentEnter var(--dur-base) var(--ease-out-quint) both;
 }
 
 .holdingThesisWorkspace {
-  gap: 30px;
+  gap: 18px;
   max-width: 880px;
 }
 
 .holdingListEditor {
-  padding-bottom: 24px;
+  padding-bottom: 14px;
 }
 
 .holdingEditorHead > span {
-  color: #303134;
-  font-size: .84rem;
+  color: #1f2733;
+  font-size: .97rem;
+  font-weight: 750;
+  letter-spacing: -.01em;
 }
 
 .holdingReminderRow {
-  min-height: 46px;
+  min-height: 36px;
   border-color: #e6e9ed;
+}
+
+.holdingReminderRow input {
+  height: 34px;
+  font-size: .84rem;
+  font-weight: 480;
+  color: #303540;
 }
 
 .entryPlanGrid {
@@ -4465,6 +4531,17 @@ body {
 .gammaRefresh:hover { color: var(--blue); }
 .gammaRefresh .spin { animation: spin 900ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes flashUp {
+  0%   { background-color: rgba(11, 138, 68, .2); }
+  100% { background-color: transparent; }
+}
+@keyframes flashDown {
+  0%   { background-color: rgba(217, 48, 37, .18); }
+  100% { background-color: transparent; }
+}
+.flash-up   { animation: flashUp   650ms var(--ease-out-quint) forwards; border-radius: 3px; }
+.flash-down { animation: flashDown 650ms var(--ease-out-quint) forwards; border-radius: 3px; }
 
 .gammaForecast { display: grid; gap: 6px; }
 .gammaForecastTop { display: flex; align-items: center; gap: 6px; }

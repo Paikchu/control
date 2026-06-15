@@ -1,5 +1,5 @@
 import React from 'react';
-import { ExternalLink, FileDown, Plus, Trash2 } from 'lucide-react';
+import { BookOpen, ExternalLink, FileDown, Plus, ShieldAlert, Trash2 } from 'lucide-react';
 import { normalizeEntryPlan, normalizeHoldingItems } from '../holdingNotes.mjs';
 import { apiBase } from '../api/client.js';
 import { secCompanyUrl, secFilingsUrl } from '../lib/catalog.js';
@@ -21,6 +21,8 @@ export function HoldingDetail({
   className = '',
   holdingTab,
   setHoldingTab,
+  dailyChangePct,
+  marketPrice,
   secFilings,
   secStatus,
   secReports,
@@ -61,7 +63,21 @@ export function HoldingDetail({
     <article key={holding.id} className={`holdingDetail ${className}`.trim()} aria-label="持仓详情" data-holding-detail={ticker}>
       <div className="holdingDetailHeader">
         <div className="holdingDetailMeta">
-          <span className="holdingDetailTicker">{ticker}</span>
+          <div className="holdingDetailMetaLeft">
+            <span className="holdingDetailTicker">{ticker}</span>
+            {Number.isFinite(marketPrice) && (
+              <span className="holdingDetailPriceChip">
+                <span className="holdingDetailPrice">
+                  {marketPrice.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+                {Number.isFinite(dailyChangePct) && (
+                  <span className={`holdingDetailChange ${dailyChangePct >= 0 ? 'gain' : 'loss'}`}>
+                    {dailyChangePct >= 0 ? '▲' : '▼'} {Math.abs(dailyChangePct).toFixed(2)}%
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
           {filingPayload?.company?.name && filingPayload.company.name !== ticker && (
             <span className="holdingDetailCompany">{filingPayload.company.name}</span>
           )}
@@ -202,7 +218,10 @@ export function HoldingDetail({
                     })}
                   </ul>
                 ) : (
-                  <p className="holdingListEmpty">还没有持仓逻辑。</p>
+                  <div className="holdingEmptyState">
+                    <BookOpen size={14} />
+                    <span>还没有持仓逻辑 —— 写下买入它的核心理由。</span>
+                  </div>
                 )}
                 <button className="holdingAddItem" onClick={() => addHoldingItem(holding, 'thesisItems')}>
                   <Plus size={14} />
@@ -236,7 +255,10 @@ export function HoldingDetail({
                     ))}
                   </ul>
                 ) : (
-                  <p className="holdingListEmpty">还没有风险点。</p>
+                  <div className="holdingEmptyState">
+                    <ShieldAlert size={14} />
+                    <span>还没有风险点 —— 记录可能影响逻辑的关键风险。</span>
+                  </div>
                 )}
                 <button className="holdingAddItem" onClick={() => addHoldingItem(holding, 'riskItems')}>
                   <Plus size={14} />
