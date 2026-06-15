@@ -7,9 +7,6 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
-/* Explicit source glob so Tailwind v4 scans JSX/JS in Docker builds where
-   .git is absent and auto-detection cannot locate the project root. */
-@source "./**/*.{js,jsx,mjs}";
 
 :root {
   --font-display: "Bricolage Grotesque", "Noto Sans SC", sans-serif;
