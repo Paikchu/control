@@ -3,7 +3,7 @@ FROM node:24-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY index.html ./
+COPY index.html vite.config.js postcss.config.mjs ./
 COPY src ./src
 RUN npm run build
 
