@@ -757,19 +757,8 @@ export function PortfolioApp() {
             </div>
             <span className="overviewCardArrow" aria-hidden="true">›</span>
           </button>
-          {/* Header table — fixed, never scrolls. Reserves the same scrollbar
-              gutter as the body below so their columns line up. */}
-          <div className="overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable] [scrollbar-width:thin] [&::-webkit-scrollbar]:w-[7px] border-b border-b-[#e6e9ed] bg-[rgba(255,255,255,0.96)]">
-            <div className="flex h-9 items-center gap-2 pl-9 pr-3 text-[0.72rem] font-[720] tracking-[0.02em] text-[#5f6368] whitespace-nowrap">
-              <span className="flex-1 text-left">标的</span>
-              <span className="w-[92px] shrink-0 text-right">市值</span>
-              <span className="w-[84px] shrink-0 text-right">盈亏</span>
-              <span className="w-5 shrink-0" aria-hidden="true" />
-            </div>
-          </div>
-          {/* Body table — scrolls vertically; the thin 7px scrollbar sits in the
-              reserved gutter so it starts below the header, not beside it. */}
-          <div className="min-h-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] bg-white [scrollbar-width:thin] [&::-webkit-scrollbar]:w-[7px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[rgba(100,116,139,0.34)]">
+          {/* 持仓列表：无表头，每个 ticker 一组（Google Finance 风格行头 + 平权子行）。 */}
+          <div className="min-h-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] border-t border-t-[#e6e9ed] bg-white [scrollbar-width:thin] [&::-webkit-scrollbar]:w-[7px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[rgba(100,116,139,0.34)]">
             {filteredPortfolio.map((holding) => (
               <HoldingTickerGroup
                 key={holding.id}

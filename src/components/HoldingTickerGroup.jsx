@@ -23,7 +23,8 @@ export function HoldingTickerGroup({
     || (Number(holding.shares) || 0) * (Number(holding.marketPrice ?? holding.cost) || 0);
   const shareWeight = holdingWeightPercent(shareValue, portfolioTotalValue);
   const sharePnl = Number(holding.unrealizedPnl);
-  const marketPrice = Number(holding.marketPrice);
+  // Number(null) 会变 0，会让纯期权 ticker 的行头显示 $0；缺价时保留 NaN → 显示 n/a。
+  const marketPrice = holding.marketPrice == null ? NaN : Number(holding.marketPrice);
 
   // 子行右侧两列固定宽，和 sticky 表头对齐：市值列 / 盈亏列。
   // 注意：不要用 Tailwind 的 `block` 工具类——本项目 styles.css 有同名 `.block`
@@ -64,12 +65,18 @@ export function HoldingTickerGroup({
               {companyName || holding.name || holding.symbol}
             </small>
           </span>
+          {/* Google Finance 风格行头：股价突出，下面是带方向三角的今日涨跌幅。 */}
           <span className="flex shrink-0 flex-col items-end gap-0.5 pr-1">
-            <strong className="text-[0.8rem] font-[760] leading-[1.15] text-[#303134]">
+            <strong className="text-[0.95rem] font-[760] leading-[1.15] text-[#202124]">
               {hasNumber(marketPrice) ? formatMoney(marketPrice) : 'n/a'}
             </strong>
-            <small className={`text-[0.7rem] font-[740] leading-[1.15] ${Number.isFinite(dailyChangePct) ? (dailyChangePct >= 0 ? 'gain' : 'loss') : 'text-[#9aa3b0]'}`}>
-              {Number.isFinite(dailyChangePct) ? `${dailyChangePct >= 0 ? '+' : ''}${dailyChangePct.toFixed(2)}%` : '—'}
+            <small className={`flex items-center gap-1 text-[0.72rem] font-[740] leading-[1.15] ${Number.isFinite(dailyChangePct) ? (dailyChangePct >= 0 ? 'gain' : 'loss') : 'text-[#9aa3b0]'}`}>
+              {Number.isFinite(dailyChangePct) ? (
+                <>
+                  <span aria-hidden="true" className="text-[0.6rem]">{dailyChangePct >= 0 ? '▲' : '▼'}</span>
+                  {`${dailyChangePct >= 0 ? '+' : ''}${dailyChangePct.toFixed(2)}%`}
+                </>
+              ) : '—'}
             </small>
           </span>
         </button>
