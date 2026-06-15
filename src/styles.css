@@ -3080,7 +3080,7 @@ body {
   position: relative;
   z-index: 40;
   display: grid;
-  grid-template-columns: minmax(210px, 280px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: clamp(14px, 2vw, 32px);
   border-bottom: 1px solid #e2e5e9;
@@ -3089,66 +3089,16 @@ body {
   animation: toolbarEnter 480ms var(--ease-out-quint) both;
 }
 
-.portfolioIdentity {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 12px;
-}
-
-.controlWordmark {
-  flex: 0 0 auto;
-  font-family: "Sora", var(--font-display);
-  font-size: 2.5rem;
-  font-weight: 800;
-  letter-spacing: -.02em;
-  line-height: 1;
-  color: #202124;
-}
-
-.controlWordmark b {
-  font-weight: 800;
-  color: #0b57d0;
-}
-
-.portfolioIdentity > div {
-  min-width: 0;
-}
-
-.portfolioIdentity h1 {
-  color: #202124;
-  font-family: var(--font-display);
-  font-size: 1.22rem;
-  line-height: 1.15;
-  font-weight: 800;
-  letter-spacing: -.025em;
-}
-
-.portfolioIdentity div > span {
-  display: block;
-  overflow: hidden;
-  margin-top: 3px;
-  color: #74787f;
-  font-size: .74rem;
-  line-height: 1.2;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .marketStrip {
   display: flex;
+  flex: 0 1 auto;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: 0;
   overflow-x: auto;
-  padding: 9px 2px;
+  padding: 4px 0;
   scrollbar-width: none;
-}
-
-/* 右对齐但保持溢出时可向左滚动（flex-end 会裁掉起始端） */
-.marketStrip > :first-child {
-  margin-left: auto;
 }
 
 .marketStrip::-webkit-scrollbar {
@@ -3162,14 +3112,28 @@ body {
 }
 
 .marketTile {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  border: 1px solid #e6e9ee;
-  border-radius: 14px;
-  background: #f7f8fa;
-  padding: 6px 10px;
+  padding: 3px 18px;
+}
+
+.marketTile:first-child {
+  padding-left: 2px;
+}
+
+/* 无框现代风：相邻指数之间用一条留白的细竖线分隔，不再用卡片。 */
+.marketTile:not(:first-child)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 28px;
+  background: #e8eaed;
 }
 
 .marketTile.up {
@@ -3186,19 +3150,21 @@ body {
 }
 
 .marketTileName {
-  color: #74787f;
-  font-size: .64rem;
+  color: #8a9099;
+  font-size: .58rem;
   line-height: 1.2;
   font-weight: 700;
-  letter-spacing: .01em;
+  letter-spacing: .06em;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
 .marketTileInfo strong {
-  color: #202124;
-  font-size: .88rem;
-  line-height: 1.2;
-  font-weight: 780;
+  color: #1a1c1f;
+  font-size: .94rem;
+  line-height: 1.25;
+  font-weight: 800;
+  letter-spacing: -.01em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -3221,6 +3187,81 @@ body {
   font-weight: 640;
   opacity: .8;
 }
+
+/* S&P 500 / Nasdaq 卡片携带 SPY / QQQ 期权研判，横向并排（左指数 | 右研判），
+   高度保持和其它卡片一致，不撑高 header。 */
+.marketTileWide {
+  align-items: stretch;
+  gap: 12px;
+  padding: 3px 18px;
+}
+
+.marketTileOptions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  border-left: 1px solid #eceef1;
+  padding-left: 12px;
+}
+
+.moHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.moSym {
+  color: #202124;
+  font-size: .68rem;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+}
+
+.moBias {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: .58rem;
+  font-weight: 800;
+  letter-spacing: .02em;
+}
+
+.moBias.bull { background: #e6f4ea; color: #0b8a44; }
+.moBias.bear { background: #fce8e6; color: #d93025; }
+.moBias.flat { background: #eef0f3; color: #5f6368; }
+
+.moGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px 14px;
+}
+
+.moGrid > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.moGrid span {
+  color: #74787f;
+  font-size: .58rem;
+  font-weight: 640;
+  white-space: nowrap;
+}
+
+.moGrid b {
+  color: #202124;
+  font-size: .64rem;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+}
+
+.moGrid b.pos { color: #0b8a44; }
+.moGrid b.neg { color: #d93025; }
 
 .marketSparkline {
   width: 52px;
@@ -4008,10 +4049,6 @@ body {
     padding: 12px 16px 14px;
   }
 
-  .portfolioIdentity {
-    align-self: center;
-  }
-
   .marketStrip {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -4020,10 +4057,6 @@ body {
 
   .marketTileChange small {
     display: none;
-  }
-
-  .portfolioIdentity div > span {
-    max-width: 190px;
   }
 
   .portfolioGrid {

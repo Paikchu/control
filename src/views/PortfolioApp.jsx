@@ -1,16 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { ArrowDown, ArrowUp, Briefcase, ChevronDown, ChevronRight, ExternalLink, Link2, RefreshCw, Search } from 'lucide-react';
+import { Briefcase, ChevronDown, ChevronRight, ExternalLink, Link2, RefreshCw, Search } from 'lucide-react';
 import { normalizeEntryPlan, normalizeHoldingItems } from '../holdingNotes.mjs';
 import { summarizeIbkrCash } from '../ibkrCash.mjs';
 import { apiBase } from '../api/client.js';
 import { companyNameByTicker, ibkrAccountStorageKey, localCompanyName, normalizeTicker, portfolioStorageKey, thesisChecksStorageKey } from '../lib/catalog.js';
-import { formatMoney, indexNumberFormat } from '../lib/format.js';
+import { formatMoney } from '../lib/format.js';
 import { ibkrStatusMessage, mergeIbkrPortfolio, readStoredIbkrAccountId, readStoredPortfolio } from '../lib/holdings.js';
 import { AddHoldingModal } from '../components/AddHoldingModal.jsx';
 import { HoldingDetail } from '../components/HoldingDetail.jsx';
 import { HoldingTickerGroup } from '../components/HoldingTickerGroup.jsx';
-import { MarketGammaPill } from '../components/MarketGammaPill.jsx';
+import { MarketIndexTile } from '../components/MarketIndexTile.jsx';
 import { SectorHeatmap } from '../components/SectorHeatmap.jsx';
 
 // 持仓工作台：当前应用的唯一视图。
@@ -45,6 +45,7 @@ export function PortfolioApp() {
   const [dailyChanges, setDailyChanges] = useState({});
   const [dailyChangesStatus, setDailyChangesStatus] = useState('idle');
   const [marketOverview, setMarketOverview] = useState(null);
+  const [optionsBySymbol, setOptionsBySymbol] = useState({});
   const filingSummaryRequests = useRef(new Set());
   const ibkrLoginPollRef = useRef(null);
   const [thesisChecks, setThesisChecks] = useState(() => {
@@ -540,6 +541,29 @@ export function PortfolioApp() {
     };
   }, []);
 
+  // SPY / QQQ 期权研判：直接嵌进 S&P 500 / Nasdaq 指数卡片，不再藏在 pill 弹层后面。
+  useEffect(() => {
+    let cancelled = false;
+    async function loadOptionsOverview() {
+      try {
+        const response = await fetch(`${apiBase}/api/options/overview`);
+        const payload = await response.json();
+        if (cancelled) return;
+        const map = {};
+        for (const snapshot of payload.snapshots || []) map[snapshot.symbol] = snapshot;
+        setOptionsBySymbol(map);
+      } catch (error) {
+        // 研判是辅助信息，失败时保留上一次数据。
+      }
+    }
+    loadOptionsOverview();
+    const timer = window.setInterval(loadOptionsOverview, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
   useEffect(() => {
     if (!expandedHolding) return;
     const holding = displayedPortfolio.find((item) => item.id === expandedHolding);
@@ -605,30 +629,21 @@ export function PortfolioApp() {
   const portfolioView = (
     <section className="portfolioDesk" aria-label="个人持仓">
       <header className="portfolioToolbar">
-        <div className="portfolioIdentity">
-          <span className="controlWordmark">Con<b>trol</b></span>
-        </div>
         <div className="marketStrip" aria-label="美股大盘行情">
           {(marketOverview?.indices?.length ? marketOverview.indices : []).map((index) => {
-            const up = index.change >= 0;
+            // SPY 研判并入 S&P 500(^GSPC)，QQQ 研判并入 Nasdaq(^IXIC)。
+            const optSymbol = index.symbol === '^GSPC' ? 'SPY' : index.symbol === '^IXIC' ? 'QQQ' : null;
             return (
-              <div key={index.symbol} className={`marketTile ${up ? 'up' : 'down'}`}>
-                <div className="marketTileInfo">
-                  <span className="marketTileName">{index.name}</span>
-                  <strong>{indexNumberFormat.format(index.price)}</strong>
-                  <span className="marketTileChange">
-                    {up ? <ArrowUp size={11} aria-hidden="true" /> : <ArrowDown size={11} aria-hidden="true" />}
-                    {up ? '+' : ''}{index.changePercent.toFixed(2)}%
-                    <small>({up ? '+' : ''}{indexNumberFormat.format(index.change)})</small>
-                  </span>
-                </div>
-              </div>
+              <MarketIndexTile
+                key={index.symbol}
+                index={index}
+                options={optSymbol ? optionsBySymbol[optSymbol] : null}
+              />
             );
           })}
           {!marketOverview?.indices?.length && <span className="marketStripEmpty">大盘行情加载中…</span>}
         </div>
         <div className="portfolioUtility">
-          <MarketGammaPill />
           <button className={`brokerConnectButton ${hasIbkrAccess ? 'connected' : ''}`} onClick={() => setIbkrPopoverOpen((open) => !open)} aria-expanded={ibkrPopoverOpen}>
             <Link2 size={14} />
             {hasIbkrAccess && <span className="brokerConnectDot" />}
