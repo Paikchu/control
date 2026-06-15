@@ -15,7 +15,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 COPY server.mjs ./
 COPY server ./server
-COPY src/ibkrSync.mjs src/secReport.mjs src/holdingNotes.mjs src/marketSeries.mjs src/strategyRules.mjs src/ibkrCash.mjs ./src/
+COPY src/*.mjs ./src/
 COPY --from=build /app/dist ./dist
 
 ENV PORT=8787 \
