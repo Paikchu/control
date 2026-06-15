@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { getMarketOverview, getPrices } from '../services/yahoo.mjs';
+import { getMarketOverview, getPrices, getSparkline } from '../services/yahoo.mjs';
 import { cleanTicker } from '../util.mjs';
 
 export function marketRoutes(db) {
@@ -18,6 +18,16 @@ export function marketRoutes(db) {
     if (!ticker) return c.json({ error: 'Ticker is required' }, 400);
     try {
       return c.json(await getPrices(db, ticker));
+    } catch (error) {
+      return c.json({ error: error.message }, 502);
+    }
+  });
+
+  app.get('/api/chart/:symbol/sparkline', async (c) => {
+    const symbol = cleanTicker(c.req.param('symbol'));
+    if (!symbol) return c.json({ error: 'Symbol required' }, 400);
+    try {
+      return c.json(await getSparkline(symbol));
     } catch (error) {
       return c.json({ error: error.message }, 502);
     }

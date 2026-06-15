@@ -109,6 +109,27 @@ async function fetchIndexQuote({ symbol, name }) {
   };
 }
 
+// Intraday sparkline — lightweight in-memory cache per symbol, TTL 5 min.
+const sparklineCache = new Map();
+const SPARKLINE_TTL = 5 * 60 * 1000;
+
+export async function getSparkline(symbol) {
+  const entry = sparklineCache.get(symbol);
+  if (entry && Date.now() - entry.ts < SPARKLINE_TTL) return entry.data;
+
+  const result = await fetchIntradayRaw(symbol);
+  const meta = result?.meta || {};
+  const closes = (result?.indicators?.quote?.[0]?.close || []).map((v, i) => {
+    const ts = (result.timestamp?.[i] ?? 0) * 1000;
+    return Number.isFinite(v) ? { t: ts, v: Number(v.toFixed(4)) } : null;
+  }).filter(Boolean);
+
+  const previousClose = meta.chartPreviousClose ?? meta.previousClose ?? null;
+  const data = { symbol, previousClose, points: closes };
+  sparklineCache.set(symbol, { ts: Date.now(), data });
+  return data;
+}
+
 export async function getMarketOverview(db) {
   const cacheKey = 'market:overview:v1';
   const cached = await cacheRead(db, cacheKey, marketOverviewTtlMs);
