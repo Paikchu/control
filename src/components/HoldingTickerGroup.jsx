@@ -13,6 +13,7 @@ export function HoldingTickerGroup({
   isIbkr,
   companyName,
   dailyChangePct,
+  lastClose,
   portfolioTotalValue,
   expanded,
   onToggle,
@@ -26,7 +27,10 @@ export function HoldingTickerGroup({
   const shareWeight = holdingWeightPercent(shareValue, portfolioTotalValue);
   const sharePnl = Number(holding.unrealizedPnl);
   // Number(null) 会变 0，会让纯期权 ticker 的行头显示 $0；缺价时保留 NaN → 显示 n/a。
-  const marketPrice = holding.marketPrice == null ? NaN : Number(holding.marketPrice);
+  // 纯期权仓位没有 IBKR 正股价格，回退到 Yahoo 日线收盘价（lastClose）。
+  const marketPrice = holding.marketPrice == null
+    ? (Number.isFinite(Number(lastClose)) ? Number(lastClose) : NaN)
+    : Number(holding.marketPrice);
 
   const priceFlash = useFlash(Number.isFinite(marketPrice) ? marketPrice : null);
   const pnlFlash = useFlash(hasNumber(sharePnl) ? sharePnl : null);
@@ -52,7 +56,7 @@ export function HoldingTickerGroup({
         </button>
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent py-1 text-left cursor-pointer"
+          className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent py-1.5 text-left cursor-pointer"
           onClick={() => onSelect(holding.id)}
           aria-pressed={isOpen}
         >
@@ -60,7 +64,6 @@ export function HoldingTickerGroup({
             <span className="text-[0.9rem] font-[790] tracking-[0.01em] text-[#202124] shrink-0">
               {holding.symbol || 'TICKER'}
             </span>
-            <em className="shrink-0 text-[0.55rem] font-bold not-italic text-[#9aa3b0]">{isIbkr ? 'IBKR' : '本地'}</em>
             {legs.length > 0 && (
               <em className="shrink-0 rounded-full bg-[#eef2ff] px-1.5 py-0.5 text-[0.52rem] font-bold not-italic tracking-wide text-[#4f46e5]">
                 {legs.length} 期权
@@ -132,6 +135,7 @@ export function HoldingTickerGroup({
             const isShort = leg.side === 'short';
             const legPnl = Number(leg.unrealizedPnl);
             const legValue = Number(leg.marketValue);
+            const legWeight = holdingWeightPercent(legValue, portfolioTotalValue);
             return (
               <div
                 key={leg.id}
@@ -159,6 +163,7 @@ export function HoldingTickerGroup({
                 </span>
                 <span className={valueCol}>
                   <span className="text-[0.74rem] font-[720] leading-[1.2] text-[#303134]">{hasNumber(legValue) ? formatMoney(legValue) : 'n/a'}</span>
+                  <span className="text-[0.62rem] font-[640] leading-[1.2] text-[#9aa3b0]">{legWeight === null ? 'n/a' : `${legWeight.toFixed(2)}%`}</span>
                 </span>
                 <span className={pnlCol}>
                   <span className={`text-[0.74rem] font-[720] leading-[1.2] ${hasNumber(legPnl) ? (legPnl >= 0 ? 'gain' : 'loss') : 'text-[#9aa3b0]'}`}>

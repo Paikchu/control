@@ -3098,7 +3098,7 @@ body {
   position: relative;
   z-index: 40;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: clamp(14px, 2vw, 32px);
   border-bottom: 1px solid #e2e5e9;
@@ -3500,25 +3500,6 @@ body {
   transform: translateY(-1px);
 }
 
-.portfolioMode .portfolioOverviewCard {
-  border: 0;
-  border-bottom: 1px solid #eceff2;
-  border-radius: 0;
-  background: #fafbfc;
-  padding: 8px 14px 8px 20px;
-}
-
-.portfolioMode .portfolioOverviewCard.active {
-  border-bottom-color: #d3dffe;
-  background: #eef3ff;
-  box-shadow: none;
-}
-
-.portfolioMode .portfolioOverviewCard:hover {
-  background: #f0f4fb;
-  box-shadow: none;
-  border-radius: 0;
-}
 
 /* ── Native table layout ─────────────────────────────────────────── */
 /* Header and body are separate tables so the scrollbar only spans the body,
@@ -4078,9 +4059,13 @@ body {
 
 @media (max-width: 900px) {
   .portfolioToolbar {
-    grid-template-columns: minmax(150px, auto) minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 14px;
     padding: 0 16px;
+  }
+
+  .overviewHeaderStats {
+    gap: 10px;
   }
 
   .marketTileChange small {
@@ -4216,96 +4201,84 @@ body {
   }
 }
 
-/* Portfolio overview card */
-.portfolioOverviewCard {
+/* Portfolio overview tile — header, leftmost item */
+.overviewHeaderTile {
+  position: relative;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 14px;
-  width: 100%;
-  min-height: 88px;
-  border: 1px solid rgba(203, 213, 225, .82);
-  border-radius: var(--radius);
-  background: rgba(248, 250, 252, .88);
-  padding: 14px 16px 14px 14px;
+  height: 58px;
+  margin: 0 6px 0 0;
+  padding: 0 22px 0 2px;
+  border: 0;
+  background: transparent;
   text-align: left;
-  transition: background .14s ease, border-color .14s ease, box-shadow .14s ease;
   cursor: pointer;
+  border-radius: 10px;
+  transition: background .14s ease;
 }
 
-.portfolioOverviewCard:hover {
-  border-color: #b7c3d3;
+.overviewHeaderTile::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 36px;
+  background: #e8eaed;
+}
+
+.overviewHeaderTile:hover {
   background: #f0f4f8;
-  box-shadow: 0 2px 8px rgba(16, 22, 34, .07);
 }
 
-.portfolioOverviewCard.active {
-  border-color: #1d4ed8;
-  background: rgba(29, 78, 216, .06);
-  box-shadow: inset 0 0 0 1.5px #1d4ed8;
+.overviewHeaderTile.active {
+  background: rgba(29, 78, 216, .07);
 }
 
-.overviewCardLeft {
-  flex: 0 0 52px;
+.overviewHeaderTile > div,
+.overviewHeaderTile > span,
+.overviewHeaderTile canvas {
+  pointer-events: none;
+}
+
+.overviewHeaderStats {
   display: flex;
   align-items: center;
-  justify-content: center;
-  pointer-events: none;
+  gap: 18px;
 }
 
-.overviewCardRight {
-  pointer-events: none;
-}
-
-.overviewCardArrow {
-  pointer-events: none;
-}
-
-.overviewCardRight {
-  flex: 1 1 0;
-  min-width: 0;
+.overviewHeaderStats > div {
   display: grid;
-  gap: 4px;
-  pointer-events: none;
+  gap: 2px;
 }
 
-.overviewCardRight > span {
-  color: #314054;
-  font-size: .88rem;
-  line-height: 1.2;
-  font-weight: 820;
-  letter-spacing: .02em;
-}
-
-.overviewCardStats {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.overviewCardStats > div {
-  display: grid;
-  gap: 1px;
-}
-
-.overviewCardStats em {
-  color: #74787f;
-  font-size: .72rem;
+.overviewHeaderStats em {
+  color: #8a9099;
+  font-size: .64rem;
   line-height: 1.2;
   font-style: normal;
-  font-weight: 680;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.overviewCardStats strong {
-  color: #202124;
-  font-size: .96rem;
-  line-height: 1.2;
+.overviewHeaderStats strong {
+  color: #1a1c1f;
+  font-size: 1.1rem;
+  line-height: 1.25;
   font-weight: 820;
+  letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.overviewCardArrow {
-  flex: 0 0 auto;
+.overviewHeaderArrow {
   color: #9aa3b0;
-  font-size: 1.2rem;
+  font-size: 1.3rem;
   line-height: 1;
 }
 

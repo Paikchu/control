@@ -105,6 +105,15 @@ export function PortfolioApp() {
     const marketValue = Number(holding.marketValue) || (Number(holding.shares) || 0) * (Number(holding.marketPrice ?? holding.cost) || 0);
     return total + marketValue;
   }, 0), [displayedPortfolio]);
+  const portfolioOptionsValue = useMemo(() => displayedPortfolio.reduce((total, holding) => (
+    total + (Number(holding.optionsMarketValue) || 0)
+  ), 0), [displayedPortfolio]);
+  const portfolioOptionsPnl = useMemo(() => displayedPortfolio.reduce((total, holding) => (
+    total + (Number(holding.optionsUnrealizedPnl) || 0)
+  ), 0), [displayedPortfolio]);
+  const portfolioOptionsCount = useMemo(() => displayedPortfolio.reduce((total, holding) => (
+    total + (Array.isArray(holding.options) ? holding.options.length : 0)
+  ), 0), [displayedPortfolio]);
   const ibkrCashSummary = useMemo(() => summarizeIbkrCash(ibkrSnapshot), [ibkrSnapshot]);
   const portfolioTotalValue = ibkrCashSummary.netLiquidation ?? portfolioMarketValue;
   const selectedHolding = displayedPortfolio.find((holding) => holding.id === expandedHolding) ?? displayedPortfolio[0];
@@ -632,6 +641,49 @@ export function PortfolioApp() {
   const portfolioView = (
     <section className="portfolioDesk" aria-label="个人持仓">
       <header className="portfolioToolbar">
+        <button
+          className={`overviewHeaderTile ${showPortfolioOverview ? 'active' : ''}`}
+          onClick={() => setShowPortfolioOverview((v) => !v)}
+          aria-pressed={showPortfolioOverview}
+        >
+          <ReactECharts option={{
+            animation: false,
+            series: [{
+              type: 'pie',
+              radius: ['46%', '78%'],
+              data: [
+                { name: '股票', value: portfolioMarketValue, itemStyle: { color: '#1d4ed8' } },
+                ...(portfolioOptionsCount > 0 ? [{ name: '期权', value: Math.abs(portfolioOptionsValue), itemStyle: { color: '#7c3aed' } }] : []),
+                ...(ibkrCashSummary.cashBalance > 0 ? [{ name: '现金', value: ibkrCashSummary.cashBalance, itemStyle: { color: '#64748b' } }] : []),
+              ],
+              label: { show: false },
+              emphasis: { scale: false },
+            }],
+          }} style={{ height: 50, width: 50 }} notMerge />
+          <div className="overviewHeaderStats">
+            <div>
+              <em>总资产</em>
+              <strong>{formatMoney(portfolioTotalValue)}</strong>
+            </div>
+            {ibkrCashSummary.cashBalance > 0 && (
+              <div>
+                <em>现金</em>
+                <strong>{formatMoney(ibkrCashSummary.cashBalance)}</strong>
+              </div>
+            )}
+            <div>
+              <em>股票</em>
+              <strong>{formatMoney(portfolioMarketValue)}</strong>
+            </div>
+            {portfolioOptionsCount > 0 && (
+              <div>
+                <em>期权 ({portfolioOptionsCount})</em>
+                <strong className={portfolioOptionsPnl >= 0 ? 'gain' : 'loss'}>{formatMoney(portfolioOptionsValue)}</strong>
+              </div>
+            )}
+          </div>
+          <span className="overviewHeaderArrow" aria-hidden="true">›</span>
+        </button>
         <div className="marketStrip" aria-label="美股大盘行情">
           {(marketOverview?.indices?.length ? marketOverview.indices : []).map((index) => {
             // SPY 研判并入 S&P 500(^GSPC)，QQQ 研判并入 Nasdaq(^IXIC)。
@@ -734,47 +786,6 @@ export function PortfolioApp() {
               aria-label="搜索持仓"
             />
           </label>
-          <button
-            className={`portfolioOverviewCard ${showPortfolioOverview ? 'active' : ''}`}
-            onClick={() => setShowPortfolioOverview((v) => !v)}
-            aria-pressed={showPortfolioOverview}
-          >
-            <div className="overviewCardLeft">
-              <ReactECharts option={{
-                animation: false,
-                series: [{
-                  type: 'pie',
-                  radius: ['46%', '78%'],
-                  data: [
-                    { name: '股票', value: portfolioMarketValue, itemStyle: { color: '#1d4ed8' } },
-                    ...(ibkrCashSummary.cashBalance > 0 ? [{ name: '现金', value: ibkrCashSummary.cashBalance, itemStyle: { color: '#64748b' } }] : []),
-                  ],
-                  label: { show: false },
-                  emphasis: { scale: false },
-                }],
-              }} style={{ height: 52, width: 52 }} notMerge />
-            </div>
-            <div className="overviewCardRight">
-              <span>账户总览分析</span>
-              <div className="overviewCardStats">
-                <div>
-                  <em>总资产</em>
-                  <strong>{formatMoney(portfolioTotalValue)}</strong>
-                </div>
-                {ibkrCashSummary.cashBalance > 0 && (
-                  <div>
-                    <em>现金</em>
-                    <strong>{formatMoney(ibkrCashSummary.cashBalance)}</strong>
-                  </div>
-                )}
-                <div>
-                  <em>股票</em>
-                  <strong>{formatMoney(portfolioMarketValue)}</strong>
-                </div>
-              </div>
-            </div>
-            <span className="overviewCardArrow" aria-hidden="true">›</span>
-          </button>
           {/* 持仓列表：无表头，每个 ticker 一组（Google Finance 风格行头 + 平权子行）。 */}
           <div className="min-h-0 overflow-y-auto overflow-x-hidden [scrollbar-gutter:stable] border-t border-t-[#e6e9ed] bg-white [scrollbar-width:thin] [&::-webkit-scrollbar]:w-[7px] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[rgba(100,116,139,0.34)]">
             {filteredPortfolio.map((holding) => (
@@ -785,6 +796,7 @@ export function PortfolioApp() {
                 isIbkr={holding.source === 'ibkr'}
                 companyName={companyNameByTicker[holding.symbol] || holding.name || holding.symbol}
                 dailyChangePct={dailyChanges[holding.symbol]?.changePct}
+                lastClose={dailyChanges[holding.symbol]?.close}
                 portfolioTotalValue={portfolioTotalValue}
                 expanded={!collapsedTickers.has(holding.id)}
                 onToggle={() => toggleTickerExpanded(holding.id)}
