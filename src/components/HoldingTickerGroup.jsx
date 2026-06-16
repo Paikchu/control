@@ -71,19 +71,17 @@ export function HoldingTickerGroup({
             </span>
           </span>
           <Sparkline symbol={holding.symbol} width={72} height={22} />
-          {/* Google Finance 风格行头：股价突出，下面是带方向三角的今日涨跌幅。 */}
-          <span className="flex shrink-0 flex-col items-end gap-0.5 pr-1">
-            <strong className={`text-[0.95rem] font-[760] leading-[1.15] text-[#202124] ${priceFlash ? `flash-${priceFlash}` : ''}`}>
+          {/* 价格 + 涨跌幅横排 */}
+          <span className="flex shrink-0 items-center gap-1.5 pr-1">
+            <strong className={`text-[0.95rem] font-[760] leading-none text-[#202124] ${priceFlash ? `flash-${priceFlash}` : ''}`}>
               {hasNumber(marketPrice) ? formatMoney(marketPrice) : 'n/a'}
             </strong>
-            <small className={`flex items-center gap-1 text-[0.72rem] font-[740] leading-[1.15] ${Number.isFinite(dailyChangePct) ? (dailyChangePct >= 0 ? 'gain' : 'loss') : 'text-[#9aa3b0]'}`}>
-              {Number.isFinite(dailyChangePct) ? (
-                <>
-                  <span aria-hidden="true" className="text-[0.6rem]">{dailyChangePct >= 0 ? '▲' : '▼'}</span>
-                  {`${dailyChangePct >= 0 ? '+' : ''}${dailyChangePct.toFixed(2)}%`}
-                </>
-              ) : '—'}
-            </small>
+            {Number.isFinite(dailyChangePct) && (
+              <span className={`flex items-center gap-0.5 text-[0.7rem] font-[720] leading-none ${dailyChangePct >= 0 ? 'gain' : 'loss'}`}>
+                <span aria-hidden="true" className="text-[0.58rem]">{dailyChangePct >= 0 ? '▲' : '▼'}</span>
+                {`${dailyChangePct >= 0 ? '+' : ''}${dailyChangePct.toFixed(2)}%`}
+              </span>
+            )}
           </span>
         </button>
       </div>
@@ -140,8 +138,13 @@ export function HoldingTickerGroup({
                 className="group flex min-h-[1.75rem] cursor-pointer items-center gap-2 py-0.5 pl-9 pr-3 hover:bg-[#f5f8fd]"
                 onClick={() => onSelect(holding.id)}
               >
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <span className={`flex h-4 min-w-[1.1rem] items-center justify-center rounded px-1 text-[0.58rem] font-extrabold text-white ${isCall ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+                <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                  {/* 方向 badge：买/卖 */}
+                  <span className={`flex h-4 items-center justify-center rounded px-1.5 text-[0.56rem] font-extrabold tracking-wide text-white ${isShort ? 'bg-rose-600' : 'bg-emerald-600'}`}>
+                    {isShort ? '卖' : '买'}
+                  </span>
+                  {/* 期权类型 badge：C/P */}
+                  <span className={`flex h-4 w-4 items-center justify-center rounded text-[0.56rem] font-extrabold text-white ${isCall ? 'bg-emerald-500' : 'bg-rose-500'}`}>
                     {isCall ? 'C' : 'P'}
                   </span>
                   <span className="flex min-w-0 items-baseline gap-1.5">
@@ -149,9 +152,8 @@ export function HoldingTickerGroup({
                       {leg.strike != null ? leg.strike : '—'}
                     </span>
                     <span className="text-[0.61rem] font-[520] text-[#9aa3b0]">{formatExpiry(leg.expiry)}</span>
-                    <span className={`flex items-center gap-0.5 text-[0.61rem] font-[620] ${isShort ? 'text-rose-600' : 'text-emerald-700'}`}>
-                      {isShort ? <TrendingDown size={9} /> : <TrendingUp size={9} />}
-                      {isShort ? '' : '+'}{leg.quantity}张
+                    <span className={`text-[0.61rem] font-[620] ${isShort ? 'text-rose-600' : 'text-emerald-700'}`}>
+                      {isShort ? '-' : '+'}{Math.abs(leg.quantity)}张
                     </span>
                   </span>
                 </span>
