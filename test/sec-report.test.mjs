@@ -5,11 +5,13 @@ import {
   buildFallbackAiInsights,
   extractInlineFinancialMetrics,
   extractFinancialMetrics,
+  extractFinancialMetricsFromYahoo,
   mergeReportRevision,
   normalizeFilingSummary,
   selectRenderableAiInsights,
   splitFilingSections
 } from '../src/secReport.mjs';
+import { normalizeIncomeStatementPayload } from '../server/services/yahoo.mjs';
 
 const filings = [
   {
@@ -293,4 +295,138 @@ test('normalizes a filing summary into concise analyst-grade points', () => {
   assert.equal(summary.bullets[0].label, '业绩');
   assert.equal(summary.analystView, '增长质量取决于毛利率修复和现金消耗收窄。');
   assert.equal(summary.form, '10-Q');
+});
+
+function rawNode({ end, totalRevenue, costOfRevenue, grossProfit, operatingIncome, netIncome }) {
+  return {
+    endDate: { raw: Math.floor(new Date(`${end}T00:00:00Z`).getTime() / 1000), fmt: end },
+    totalRevenue: { raw: totalRevenue },
+    costOfRevenue: { raw: costOfRevenue },
+    grossProfit: { raw: grossProfit },
+    operatingIncome: { raw: operatingIncome },
+    netIncome: { raw: netIncome }
+  };
+}
+
+test('normalizeIncomeStatementPayload flattens Yahoo quarterly + annual income statement modules', () => {
+  const raw = {
+    quoteSummary: {
+      result: [{
+        incomeStatementHistoryQuarterly: {
+          incomeStatementHistory: [
+            rawNode({ end: '2026-03-31', totalRevenue: 65_000_000_000, costOfRevenue: 20_000_000_000, grossProfit: 45_000_000_000, operatingIncome: 30_000_000_000, netIncome: 24_000_000_000 }),
+            rawNode({ end: '2025-12-31', totalRevenue: 70_000_000_000, costOfRevenue: 21_000_000_000, grossProfit: 49_000_000_000, operatingIncome: 32_000_000_000, netIncome: 26_000_000_000 })
+          ]
+        },
+        incomeStatementHistory: {
+          incomeStatementHistory: [
+            rawNode({ end: '2025-06-30', totalRevenue: 245_000_000_000, costOfRevenue: 75_000_000_000, grossProfit: 170_000_000_000, operatingIncome: 110_000_000_000, netIncome: 90_000_000_000 })
+          ]
+        }
+      }]
+    }
+  };
+
+  const payload = normalizeIncomeStatementPayload('MSFT', raw);
+  assert.equal(payload.quarterly.length, 2);
+  assert.equal(payload.annual.length, 1);
+  assert.equal(payload.quarterly[0].end, '2026-03-31');
+  assert.equal(payload.quarterly[0].revenue, 65_000_000_000);
+  assert.equal(payload.annual[0].revenue, 245_000_000_000);
+});
+
+test('normalizeIncomeStatementPayload throws when neither quarterly nor annual data is present', () => {
+  assert.throws(() => normalizeIncomeStatementPayload('XXXX', { quoteSummary: { result: [{}] } }));
+});
+
+test('extractFinancialMetricsFromYahoo computes margins and period labels from Yahoo rows', () => {
+  const payload = {
+    quarterly: [
+      { end: '2026-03-31', revenue: 65_000_000_000, costOfRevenue: 20_000_000_000, grossProfit: 45_000_000_000, operatingIncome: 30_000_000_000, netIncome: 24_000_000_000 },
+      { end: '2025-12-31', revenue: 70_000_000_000, costOfRevenue: 21_000_000_000, grossProfit: 49_000_000_000, operatingIncome: 32_000_000_000, netIncome: 26_000_000_000 }
+    ],
+    annual: [
+      { end: '2025-06-30', revenue: 245_000_000_000, costOfRevenue: 75_000_000_000, grossProfit: 170_000_000_000, operatingIncome: 110_000_000_000, netIncome: 90_000_000_000 },
+      { end: '2024-06-30', revenue: 211_000_000_000, costOfRevenue: 66_000_000_000, grossProfit: 145_000_000_000, operatingIncome: 88_000_000_000, netIncome: 72_000_000_000 }
+    ]
+  };
+
+  const metrics = extractFinancialMetricsFromYahoo(payload, 12);
+  assert.equal(metrics.length, 4);
+
+  const q1 = metrics.find((row) => row.end === '2026-03-31');
+  assert.equal(q1.period, '2026 Q1');
+  assert.equal(q1.grossMargin, round4(45 / 65));
+  assert.equal(q1.netMargin, round4(24 / 65));
+
+  const fy2025 = metrics.find((row) => row.end === '2025-06-30');
+  assert.equal(fy2025.period, '2025 FY');
+  // FY-over-FY YoY should be computable since two annual rows a year apart are present.
+  assert.equal(fy2025.revenueYoY, round4(245 / 211 - 1));
+
+  function round4(value) {
+    return Math.round(value * 10000) / 10000;
+  }
+});
+
+test('extractFinancialMetricsFromYahoo returns an empty list when given no rows', () => {
+  assert.deepEqual(extractFinancialMetricsFromYahoo({ quarterly: [], annual: [] }, 12), []);
+});
+
+test('buildSecAnalysisReport uses Yahoo-sourced financialMetrics when provided, skipping SEC company facts and inline patches', () => {
+  const yahooMetrics = extractFinancialMetricsFromYahoo({
+    quarterly: [{ end: '2026-03-31', revenue: 65_000_000_000, costOfRevenue: 20_000_000_000, grossProfit: 45_000_000_000, operatingIncome: 30_000_000_000, netIncome: 24_000_000_000 }],
+    annual: []
+  }, 12);
+
+  const report = buildSecAnalysisReport({
+    ticker: 'TEST',
+    companyName: 'Test Corp',
+    filings,
+    companyFacts,
+    inlineMetrics: [{ fy: 2026, fp: 'Q1', end: '2026-03-31', filed: '2026-05-08', revenue: 999_999_999 }],
+    financialMetrics: yahooMetrics
+  });
+
+  assert.equal(report.financials.source, 'yahoo');
+  assert.equal(report.financials.quarters.length, 1);
+  // The SEC inline patch's revenue (999,999,999) must NOT have overwritten the Yahoo figure.
+  assert.equal(report.financials.quarters[0].revenue, 65_000_000_000);
+  assert.match(report.summary[2], /Yahoo Finance/);
+});
+
+test('buildSecAnalysisReport falls back to SEC company facts when financialMetrics is not provided', () => {
+  const report = buildSecAnalysisReport({ ticker: 'TEST', companyName: 'Test Corp', filings, companyFacts });
+  assert.equal(report.financials.source, 'sec');
+});
+
+test('buildSecAnalysisReport separates quarterly and annual rows so chart axes stay uniform', () => {
+  const yahooMetrics = extractFinancialMetricsFromYahoo({
+    quarterly: [
+      { end: '2025-12-31', revenue: 70_000_000_000, costOfRevenue: 21_000_000_000, grossProfit: 49_000_000_000, operatingIncome: 32_000_000_000, netIncome: 26_000_000_000 },
+      { end: '2026-03-31', revenue: 65_000_000_000, costOfRevenue: 20_000_000_000, grossProfit: 45_000_000_000, operatingIncome: 30_000_000_000, netIncome: 24_000_000_000 }
+    ],
+    annual: [
+      { end: '2024-06-30', revenue: 211_000_000_000, costOfRevenue: 66_000_000_000, grossProfit: 145_000_000_000, operatingIncome: 88_000_000_000, netIncome: 72_000_000_000 },
+      { end: '2025-06-30', revenue: 245_000_000_000, costOfRevenue: 75_000_000_000, grossProfit: 170_000_000_000, operatingIncome: 110_000_000_000, netIncome: 90_000_000_000 }
+    ]
+  }, 12);
+
+  const report = buildSecAnalysisReport({ ticker: 'TEST', companyName: 'Test Corp', filings, companyFacts, financialMetrics: yahooMetrics });
+
+  // quarters 只含季度（fp 为 Qn），annual 只含年报（fp 为 FY），互不混杂。
+  assert.ok(report.financials.quarters.length >= 1);
+  assert.ok(report.financials.annual.length >= 1);
+  assert.ok(report.financials.quarters.every((row) => row.fp !== 'FY'));
+  assert.ok(report.financials.annual.every((row) => row.fp === 'FY'));
+  // 年度行之间相隔一年，YoY 应可计算；季度行无上一年同季度数据，YoY 为空。
+  const fy2025 = report.financials.annual.find((row) => row.period === '2025 FY');
+  assert.ok(hasFinite(fy2025?.revenueYoY));
+  assert.ok(report.financials.quarters.every((row) => row.revenueYoY === null));
+  // headline latest 仍取最新季度，而不是年报。
+  assert.notEqual(report.financials.latest?.fp, 'FY');
+
+  function hasFinite(value) {
+    return Number.isFinite(value);
+  }
 });

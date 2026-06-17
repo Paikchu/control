@@ -4,6 +4,7 @@ export const secTickerTtlMs = 7 * dayMs;
 export const secFilingsTtlMs = 6 * 60 * 60 * 1000;
 export const secDocumentTtlMs = 7 * dayMs;
 export const marketOverviewTtlMs = 60 * 1000;
+export const valuationTtlMs = 18 * 60 * 60 * 1000;
 
 export async function cacheRead(db, key, ttlMs) {
   const { rows } = await db.query('SELECT fetched_at, payload FROM sec_cache WHERE cache_key = $1', [key]);

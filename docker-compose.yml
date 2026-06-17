@@ -31,6 +31,7 @@ services:
       SEC_USER_AGENT: ${SEC_USER_AGENT:-PortfolioBacktest/0.1 max@local.invalid}
       DEEPSEEK_SEC_MODEL: ${DEEPSEEK_SEC_MODEL:-deepseek-chat}
       DEEPSEEK_STRATEGY_MODEL: ${DEEPSEEK_STRATEGY_MODEL:-deepseek-chat}
+      DEEPSEEK_VALUATION_MODEL: ${DEEPSEEK_VALUATION_MODEL:-deepseek-chat}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

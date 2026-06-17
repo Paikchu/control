@@ -36,6 +36,10 @@ export function PortfolioApp() {
   const [secStatus, setSecStatus] = useState({});
   const [secReports, setSecReports] = useState({});
   const [secReportStatus, setSecReportStatus] = useState({});
+  const [valuationReports, setValuationReports] = useState({});
+  const [valuationReportStatus, setValuationReportStatus] = useState({});
+  const [managementReports, setManagementReports] = useState({});
+  const [managementReportStatus, setManagementReportStatus] = useState({});
   const [filingSummaries, setFilingSummaries] = useState({});
   const [filingSummaryStatus, setFilingSummaryStatus] = useState({});
   const [holdingTab, setHoldingTab] = useState('thesis');
@@ -422,11 +426,41 @@ export function PortfolioApp() {
     try {
       const response = await fetch(`${apiBase}/api/sec/report/${encodeURIComponent(ticker)}${force ? '?force=1' : ''}`);
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'SEC 文件信号获取失败');
+      if (!response.ok) throw new Error(payload.error || '基本面数据获取失败');
       setSecReports((current) => ({ ...current, [ticker]: payload }));
       setSecReportStatus((current) => ({ ...current, [ticker]: 'loaded' }));
     } catch (error) {
       setSecReportStatus((current) => ({ ...current, [ticker]: 'error' }));
+    }
+  }
+
+  async function loadValuationReport(symbol, force = false) {
+    const ticker = symbol.trim().toUpperCase();
+    if (!ticker || (!force && valuationReports[ticker])) return;
+    setValuationReportStatus((current) => ({ ...current, [ticker]: 'loading' }));
+    try {
+      const response = await fetch(`${apiBase}/api/valuation/${encodeURIComponent(ticker)}${force ? '?force=1' : ''}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || '估值数据获取失败');
+      setValuationReports((current) => ({ ...current, [ticker]: payload }));
+      setValuationReportStatus((current) => ({ ...current, [ticker]: 'loaded' }));
+    } catch (error) {
+      setValuationReportStatus((current) => ({ ...current, [ticker]: 'error' }));
+    }
+  }
+
+  async function loadManagementReport(symbol, force = false) {
+    const ticker = symbol.trim().toUpperCase();
+    if (!ticker || (!force && managementReports[ticker])) return;
+    setManagementReportStatus((current) => ({ ...current, [ticker]: 'loading' }));
+    try {
+      const response = await fetch(`${apiBase}/api/management/${encodeURIComponent(ticker)}${force ? '?force=1' : ''}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || '管理层分析获取失败');
+      setManagementReports((current) => ({ ...current, [ticker]: payload }));
+      setManagementReportStatus((current) => ({ ...current, [ticker]: 'loaded' }));
+    } catch (error) {
+      setManagementReportStatus((current) => ({ ...current, [ticker]: 'error' }));
     }
   }
 
@@ -582,7 +616,16 @@ export function PortfolioApp() {
     if (!holding?.symbol) return;
     loadSecFilings(holding.symbol);
     loadSecReport(holding.symbol);
+    loadValuationReport(holding.symbol);
   }, [expandedHolding, displayedPortfolio]);
+
+  useEffect(() => {
+    // 管理层分析较重（首次需检索网络），仅在用户打开该页签时才按需加载。
+    if (holdingTab !== 'management' || !expandedHolding) return;
+    const holding = displayedPortfolio.find((item) => item.id === expandedHolding);
+    if (!holding?.symbol) return;
+    loadManagementReport(holding.symbol);
+  }, [holdingTab, expandedHolding, displayedPortfolio]);
 
   useEffect(() => {
     if (!['sec', 'fundamentals'].includes(holdingTab) || !expandedHolding) return undefined;
@@ -846,6 +889,10 @@ export function PortfolioApp() {
                 secStatus={secStatus}
                 secReports={secReports}
                 secReportStatus={secReportStatus}
+                valuationReports={valuationReports}
+                valuationReportStatus={valuationReportStatus}
+                managementReports={managementReports}
+                managementReportStatus={managementReportStatus}
                 filingSummaries={filingSummaries}
                 filingSummaryStatus={filingSummaryStatus}
                 thesisChecks={thesisChecks}
@@ -859,6 +906,8 @@ export function PortfolioApp() {
                 runHoldingThesisCheck={runHoldingThesisCheck}
                 loadSecFilings={loadSecFilings}
                 loadSecReport={loadSecReport}
+                loadValuationReport={loadValuationReport}
+                loadManagementReport={loadManagementReport}
               />
             )}
         </section>

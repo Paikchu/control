@@ -124,7 +124,8 @@ export async function getSecFilings(db, ticker, limit = 20, force = false) {
       reportDate: recent.reportDate?.[index] || '',
       accessionNumber,
       primaryDocument: recent.primaryDocument?.[index] || '',
-      description: recent.primaryDocDescription?.[index] || ''
+      description: recent.primaryDocDescription?.[index] || '',
+      items: recent.items?.[index] || ''
     }))
     .filter((filing) => isBusinessFiling(filing.form) && filing.primaryDocument)
     .map((filing) => ({
@@ -147,6 +148,43 @@ export async function getSecFilings(db, ticker, limit = 20, force = false) {
     ...result,
     filings: result.filings.slice(0, Math.max(1, Math.min(50, limit)))
   };
+}
+
+// Unlike getSecFilings (locked to 10-K/10-Q/8-K), this fetches any requested form types —
+// used for DEF 14A (proxy roster) and 8-K Item 5.02 scanning by management analysis.
+export async function getSecFilingsByForms(db, ticker, forms, { limit = 10, force = false } = {}) {
+  const clean = cleanTicker(ticker);
+  const company = await getSecCompany(db, clean);
+  const formSet = new Set(forms);
+  const cacheKey = `sec:filings:byform:${clean}:${forms.slice().sort().join(',')}`;
+  const cached = force ? null : await cacheRead(db, cacheKey, secFilingsTtlMs);
+  if (cached) return cached.filings.slice(0, limit);
+
+  const response = await secFetch(`https://data.sec.gov/submissions/CIK${company.cik}.json`);
+  const payload = await response.json();
+  const recent = payload?.filings?.recent || {};
+  const filings = (recent.accessionNumber || [])
+    .map((accessionNumber, index) => ({
+      ticker: clean,
+      cik: company.cik,
+      cikNumber: company.cikNumber,
+      companyName: payload.name || company.name,
+      form: recent.form?.[index] || '',
+      filingDate: recent.filingDate?.[index] || '',
+      reportDate: recent.reportDate?.[index] || '',
+      accessionNumber,
+      primaryDocument: recent.primaryDocument?.[index] || '',
+      items: recent.items?.[index] || ''
+    }))
+    .filter((filing) => formSet.has(filing.form) && filing.primaryDocument)
+    .map((filing) => ({
+      ...filing,
+      documentUrl: filingDocumentUrl(filing),
+      indexUrl: filingIndexUrl(filing)
+    }));
+
+  await cacheWrite(db, cacheKey, { filings });
+  return filings.slice(0, limit);
 }
 
 export async function getSecCompanyFacts(db, ticker, force = false) {
