@@ -3,7 +3,8 @@ import { BookOpen, ExternalLink, FileDown, Plus, ShieldAlert, Trash2 } from 'luc
 import { normalizeEntryPlan, normalizeHoldingItems } from '../holdingNotes.mjs';
 import { apiBase } from '../api/client.js';
 import { secCompanyUrl, secFilingsUrl } from '../lib/catalog.js';
-import { SecReportPanel } from './SecReportPanel.jsx';
+import { FundamentalsPanel } from './FundamentalsPanel.jsx';
+import { ManagementPanel } from './ManagementPanel.jsx';
 
 function verdictLabel(r) {
   if (!r) return null;
@@ -27,6 +28,10 @@ export function HoldingDetail({
   secStatus,
   secReports,
   secReportStatus,
+  valuationReports,
+  valuationReportStatus,
+  managementReports,
+  managementReportStatus,
   filingSummaries,
   filingSummaryStatus,
   thesisChecks,
@@ -39,7 +44,9 @@ export function HoldingDetail({
   updateEntryPlan,
   runHoldingThesisCheck,
   loadSecFilings,
-  loadSecReport
+  loadSecReport,
+  loadValuationReport,
+  loadManagementReport
 }) {
   if (!holding) return null;
   const ticker = holding.symbol.trim().toUpperCase();
@@ -87,6 +94,7 @@ export function HoldingDetail({
           <button className={holdingTab === 'entry' ? 'active' : ''} onClick={() => setHoldingTab('entry')} role="tab" aria-selected={holdingTab === 'entry'}>建仓计划</button>
           <button className={holdingTab === 'fundamentals' ? 'active' : ''} onClick={() => setHoldingTab('fundamentals')} role="tab" aria-selected={holdingTab === 'fundamentals'}>基本面</button>
           <button className={holdingTab === 'sec' ? 'active' : ''} onClick={() => setHoldingTab('sec')} role="tab" aria-selected={holdingTab === 'sec'}>SEC 报告</button>
+          <button className={holdingTab === 'management' ? 'active' : ''} onClick={() => setHoldingTab('management')} role="tab" aria-selected={holdingTab === 'management'}>管理层</button>
         </div>
       </div>
       <div className="holdingTabBody" key={`${holding.id}-${holdingTab}`}>
@@ -331,11 +339,24 @@ export function HoldingDetail({
         ) : holdingTab === 'fundamentals' ? (
           <div className="secTabPane">
             {ticker && (
-              <SecReportPanel
+              <FundamentalsPanel
                 ticker={ticker}
                 report={secReports[ticker]}
-                status={secReportStatus[ticker]}
-                onRefresh={() => loadSecReport(ticker, true)}
+                reportStatus={secReportStatus[ticker]}
+                valuation={valuationReports[ticker]}
+                valuationStatus={valuationReportStatus[ticker]}
+                onRefresh={() => { loadSecReport(ticker, true); loadValuationReport(ticker, true); }}
+              />
+            )}
+          </div>
+        ) : holdingTab === 'management' ? (
+          <div className="secTabPane">
+            {ticker && (
+              <ManagementPanel
+                ticker={ticker}
+                report={managementReports[ticker]}
+                status={managementReportStatus[ticker]}
+                onRefresh={() => loadManagementReport(ticker, true)}
               />
             )}
           </div>

@@ -134,6 +134,59 @@ export function extractFinancialMetrics(companyFacts, limit = 12) {
   return rows;
 }
 
+function yahooPeriodFromEnd(end, isAnnual) {
+  const year = Number(end.slice(0, 4));
+  const month = Number(end.slice(5, 7));
+  const fp = isAnnual ? 'FY' : `Q${Math.ceil(month / 3)}`;
+  return { fy: year, fp };
+}
+
+// Yahoo's quoteSummary income statement modules only carry an end-of-period date,
+// not the filer's own fiscal-quarter label — so the quarter number here is derived
+// from the calendar month, which may not match a company's internal fiscal naming
+// (e.g. a company with a non-calendar fiscal year). Chronologically correct either way.
+function yahooRowFromNode(node, isAnnual) {
+  if (!node?.end) return null;
+  const { fy, fp } = yahooPeriodFromEnd(node.end, isAnnual);
+  return {
+    fy,
+    fp,
+    end: node.end,
+    filed: node.end,
+    form: isAnnual ? '10-K' : '10-Q',
+    accessionNumber: null,
+    period: `${fy} ${fp}`,
+    revenue: node.revenue,
+    costOfRevenue: node.costOfRevenue,
+    grossProfit: node.grossProfit,
+    operatingIncome: node.operatingIncome,
+    netIncome: node.netIncome,
+    sources: {
+      revenue: { tag: 'yahoo:totalRevenue', end: node.end },
+      costOfRevenue: { tag: 'yahoo:costOfRevenue', end: node.end },
+      operatingIncome: { tag: 'yahoo:operatingIncome', end: node.end },
+      netIncome: { tag: 'yahoo:netIncome', end: node.end }
+    }
+  };
+}
+
+// Builds the same canonical `quarters` shape as extractFinancialMetrics(), but
+// sourced entirely from Yahoo Finance's quoteSummary income statement modules
+// instead of SEC company facts. Reuses the same margin/YoY math (recomputeDerivedMetrics)
+// so SecReportPanel needs no changes regardless of which source produced the rows.
+export function extractFinancialMetricsFromYahoo(payload = {}, limit = 12) {
+  const rows = [
+    ...(payload.annual || []).map((node) => yahooRowFromNode(node, true)),
+    ...(payload.quarterly || []).map((node) => yahooRowFromNode(node, false))
+  ].filter(Boolean);
+
+  const canonical = selectCanonicalFinancialQuarters(rows)
+    .filter((row) => Number.isFinite(row.revenue))
+    .slice(-Math.max(1, limit));
+
+  return recomputeDerivedMetrics(canonical);
+}
+
 function attrsFromTag(tag) {
   const attrs = {};
   for (const match of String(tag || '').matchAll(/([A-Za-z_:][-A-Za-z0-9_:.]*)="([^"]*)"/g)) {
@@ -335,10 +388,10 @@ function buildAlerts(metrics, filings) {
   const alerts = [];
   const latest = metrics.at(-1);
   const previous = metrics.at(-2);
-  if (latest?.grossMargin !== null && previous?.grossMargin !== null && latest.grossMargin - previous.grossMargin <= -0.03) {
+  if (latest?.grossMargin !== null && previous?.grossMargin !== null && previous && latest.grossMargin - previous.grossMargin <= -0.03) {
     alerts.push({ severity: 'high', label: '毛利率压缩', detail: `较上一期下降 ${formatPercent(Math.abs(latest.grossMargin - previous.grossMargin))}` });
   }
-  if (latest?.netMargin !== null && previous?.netMargin !== null && latest.netMargin < 0 && previous.netMargin >= 0) {
+  if (latest?.netMargin !== null && previous?.netMargin !== null && previous && latest.netMargin < 0 && previous.netMargin >= 0) {
     alerts.push({ severity: 'high', label: '净利转负', detail: `${latest.period} 净利率 ${formatPercent(latest.netMargin)}` });
   }
   if (filings.some((filing) => filing.form === '8-K')) {
@@ -501,15 +554,24 @@ function mergeFinancialMetrics(companyFactsMetrics, inlineMetrics, limit = 12) {
     .slice(-Math.max(1, limit)));
 }
 
-export function buildSecAnalysisReport({ ticker, companyName, filings = [], companyFacts, previousReport = null, aiInsights = null, inlineMetrics = [] }) {
+export function buildSecAnalysisReport({ ticker, companyName, filings = [], companyFacts, previousReport = null, aiInsights = null, inlineMetrics = [], financialMetrics = null }) {
   const cleanTicker = String(ticker || '').toUpperCase();
   const filteredFilings = [...filings]
     .filter((filing) => filing.accessionNumber)
     .sort((a, b) => String(b.filingDate || '').localeCompare(String(a.filingDate || '')));
-  const metrics = mergeFinancialMetrics(extractFinancialMetrics(companyFacts, 12), inlineMetrics, 12);
-  const latest = latestFinancialQuarter(metrics);
+  // financialMetrics (Yahoo-sourced) bypasses both SEC company facts and SEC inline-XBRL
+  // patches — once we have a clean Yahoo source for revenue/margins, SEC text shouldn't
+  // silently overwrite it again.
+  const allMetrics = financialMetrics
+    ? mergeFinancialMetrics(financialMetrics, [], 12)
+    : mergeFinancialMetrics(extractFinancialMetrics(companyFacts, 12), inlineMetrics, 12);
+  const financialsSource = financialMetrics ? 'yahoo' : 'sec';
+  // 季度与年度分开存放，前端可切换；横坐标因此天然统一（季度全是 Qn，年度全是 FY）。
+  const quarterMetrics = allMetrics.filter((row) => row.fp !== 'FY');
+  const annualMetrics = allMetrics.filter((row) => row.fp === 'FY');
+  const latest = latestFinancialQuarter(allMetrics);
   const latestFiling = filteredFilings[0] || null;
-  const versionId = reportVersionId(cleanTicker, filteredFilings, metrics);
+  const versionId = reportVersionId(cleanTicker, filteredFilings, allMetrics);
 
   const report = {
     versionId,
@@ -521,7 +583,9 @@ export function buildSecAnalysisReport({ ticker, companyName, filings = [], comp
     summary: [
       describeTrend(latest),
       latestFiling ? `最新文件是 ${latestFiling.form}，提交日 ${latestFiling.filingDate}，accession ${latestFiling.accessionNumber}。` : '尚未发现可用 SEC 文件。',
-      '硬指标来自 SEC company facts；AI 文本结论必须保留 filing 引用后才进入正式报告。'
+      financialsSource === 'yahoo'
+        ? '营收/利润率硬指标来自 Yahoo Finance（最近约4个季度+历年年报，无法计算的 YoY 显示为空）；AI 文本结论仍基于 SEC filing 并保留引用。'
+        : '硬指标来自 SEC company facts；AI 文本结论必须保留 filing 引用后才进入正式报告。'
     ],
     agentMap: {
       currentDataPriority: [
@@ -536,10 +600,12 @@ export function buildSecAnalysisReport({ ticker, companyName, filings = [], comp
       ]
     },
     financials: {
-      quarters: metrics,
-      latest
+      quarters: quarterMetrics,
+      annual: annualMetrics,
+      latest,
+      source: financialsSource
     },
-    alerts: buildAlerts(metrics, filteredFilings),
+    alerts: buildAlerts(quarterMetrics, filteredFilings),
     ai: aiInsights || {
       source: 'not_run',
       confidence: 0,
@@ -548,7 +614,7 @@ export function buildSecAnalysisReport({ ticker, companyName, filings = [], comp
       liquidityNotes: [],
       sourceQuotes: []
     },
-    charts: chartSeries(metrics),
+    charts: chartSeries(quarterMetrics),
     sources: filteredFilings.slice(0, 6).map((filing) => ({
       form: filing.form,
       filingDate: filing.filingDate,

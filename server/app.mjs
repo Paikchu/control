@@ -6,6 +6,8 @@ import { strategyRoutes } from './routes/strategy.mjs';
 import { secRoutes } from './routes/sec.mjs';
 import { holdingsRoutes } from './routes/holdings.mjs';
 import { optionsRoutes } from './routes/options.mjs';
+import { valuationRoutes } from './routes/valuation.mjs';
+import { managementRoutes } from './routes/management.mjs';
 
 export function createApp(db) {
   const app = new Hono();
@@ -20,6 +22,8 @@ export function createApp(db) {
   app.route('/', secRoutes(db));
   app.route('/', holdingsRoutes(db));
   app.route('/', optionsRoutes(db));
+  app.route('/', valuationRoutes(db));
+  app.route('/', managementRoutes(db));
 
   app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

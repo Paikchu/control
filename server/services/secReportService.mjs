@@ -1,6 +1,7 @@
 import {
   buildFallbackAiInsights,
   buildSecAnalysisReport,
+  extractFinancialMetricsFromYahoo,
   extractInlineFinancialMetrics,
   normalizeFilingSummary,
   splitFilingSections
@@ -8,6 +9,19 @@ import {
 import { cleanAccession, cleanTicker, parseJsonObject } from '../util.mjs';
 import { deepseekChat, hasDeepSeekKey, secAnalysisModel } from './deepseek.mjs';
 import { getFilingRaw, getFilingText, getSecCompanyFacts, getSecFilings } from './secClient.mjs';
+import { getYahooIncomeStatements } from './yahoo.mjs';
+
+// 营收/利润率硬指标改为优先用 Yahoo Finance（见用户要求：不再从 SEC 文件读取这部分数据）。
+// 只有 Yahoo 拉取失败（限流/无数据）时才回退到 SEC company facts，避免页面整体空白。
+async function getYahooFinancialMetrics(db, ticker, force) {
+  try {
+    const payload = await getYahooIncomeStatements(db, ticker, { force });
+    const metrics = extractFinancialMetricsFromYahoo(payload, 12);
+    return metrics.length ? metrics : null;
+  } catch {
+    return null;
+  }
+}
 
 async function readLatestReport(db, ticker) {
   const { rows } = await db.query(
@@ -127,9 +141,10 @@ async function getInlineMetricsForLatestFiling(db, filing) {
 
 export async function getSecAnalysisReport(db, ticker, { force = false } = {}) {
   const clean = cleanTicker(ticker);
-  const [filingsPayload, companyFacts] = await Promise.all([
+  const [filingsPayload, companyFacts, financialMetrics] = await Promise.all([
     getSecFilings(db, clean, 20, force),
-    getSecCompanyFacts(db, clean, force)
+    getSecCompanyFacts(db, clean, force),
+    getYahooFinancialMetrics(db, clean, force)
   ]);
   const previousReport = await readLatestReport(db, clean);
   const latestFiling = filingsPayload.filings[0];
@@ -144,7 +159,8 @@ export async function getSecAnalysisReport(db, ticker, { force = false } = {}) {
     companyFacts,
     previousReport,
     aiInsights,
-    inlineMetrics
+    inlineMetrics,
+    financialMetrics
   });
   await persistReport(db, report);
   return {

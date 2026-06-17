@@ -1,5 +1,7 @@
 export const secAnalysisModel = process.env.DEEPSEEK_SEC_MODEL || 'deepseek-chat';
 export const strategyModel = process.env.DEEPSEEK_STRATEGY_MODEL || 'deepseek-chat';
+export const valuationModel = process.env.DEEPSEEK_VALUATION_MODEL || 'deepseek-chat';
+export const managementModel = process.env.DEEPSEEK_MGMT_MODEL || 'deepseek-chat';
 
 export function hasDeepSeekKey() {
   return Boolean(process.env.DEEPSEEK_API_KEY);

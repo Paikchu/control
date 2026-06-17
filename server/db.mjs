@@ -230,6 +230,35 @@ export const schemaSql = `
     PRIMARY KEY (snapshot_date, model)
   );
 
+  CREATE TABLE IF NOT EXISTS valuation_reports (
+    ticker TEXT NOT NULL,
+    version_id TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY (ticker, version_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS management_executives (
+    ticker TEXT NOT NULL,
+    exec_key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    tenure_start TEXT,
+    tenure_end TEXT,
+    profile TEXT NOT NULL,
+    sourced_at TEXT NOT NULL,
+    source_8k_accession TEXT,
+    PRIMARY KEY (ticker, exec_key)
+  );
+
+  CREATE TABLE IF NOT EXISTS management_watermark (
+    ticker TEXT PRIMARY KEY,
+    last_8k_accession TEXT,
+    last_8k_date TEXT,
+    last_checked_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_extracts_ticker ON sec_filing_extracts(ticker, kind);
   CREATE INDEX IF NOT EXISTS idx_extract_status_ticker ON sec_filing_extract_status(ticker);
   CREATE INDEX IF NOT EXISTS idx_chunks_ticker ON sec_filing_chunks(ticker, accession_number);
